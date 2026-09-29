@@ -98,7 +98,7 @@ async fn context_menu_creates_tag(cx: &mut TestAppContext) {
     cx.wait_for(window, Duration::from_secs(2), |window, _| window.try_find("popup-menu").is_some()).await;
     cx.update_window(window, |_, window, cx| {
         let menu = window.within("popup-menu");
-        let labels: Vec<String> = (0..8usize)
+        let labels: Vec<String> = (0..20usize)
             .map(|i| menu.try_find(i).and_then(|item| item.label().map(str::to_string)).unwrap_or_default())
             .collect();
         let tag = labels.iter().position(|l| l == "New Tag…").unwrap_or_else(|| panic!("menu: {labels:?}"));
@@ -327,4 +327,83 @@ async fn diff_stages_a_single_change(cx: &mut TestAppContext) {
     let staged = git(p, &["diff", "--cached", "-U0"]);
     assert!(staged.contains("+line 25!") && !staged.contains("two"), "{staged}");
     assert_eq!(cx.update(|cx| view.read(cx).change_position()).1, 1, "the diff reloads without the staged change");
+}
+
+#[gpui_kit::test]
+async fn merge_conflict_banner_aborts(cx: &mut TestAppContext) {
+    isolate_cache();
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path();
+    git(p, &["init", "-q", "-b", "main"]);
+    std::fs::write(p.join("f"), "base\n").unwrap();
+    git(p, &["add", "."]);
+    git(p, &["commit", "-qm", "base"]);
+    git(p, &["checkout", "-qb", "other"]);
+    std::fs::write(p.join("f"), "other\n").unwrap();
+    git(p, &["commit", "-qam", "other"]);
+    git(p, &["checkout", "-q", "main"]);
+    std::fs::write(p.join("f"), "main\n").unwrap();
+    git(p, &["commit", "-qam", "main"]);
+    let merge = Command::new("git").current_dir(p).args(["merge", "other"]).output().unwrap();
+    assert!(!merge.status.success(), "conflict expected");
+
+    cx.update(rsit_app::init);
+    let repo = rsit_git::Repo::discover(p).unwrap();
+    let (window, panel) = cx.update(|cx| {
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(Bounds { origin: point(px(0.), px(0.)), size: size(px(500.), px(700.)) })),
+            ..Default::default()
+        };
+        gpui_kit::open_window(options, cx, |window, cx| {
+            cx.new(|cx| rsit_app::commit_panel::CommitPanel::new(repo, false, window, cx))
+        })
+        .unwrap()
+    });
+    let window: gpui_kit::AnyWindowHandle = window;
+    cx.run_until_parked();
+    assert_eq!(cx.update(|cx| panel.read(cx).status().conflicted().count()), 1);
+    cx.update_window(window, |_, window, cx| {
+        assert!(window.try_find("operation-banner").is_some());
+        window.click("abort-operation", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    // the watcher is off in tests: refresh as a window activation would
+    cx.update(|cx| panel.update(cx, |panel, cx| panel.refresh(cx)));
+    cx.run_until_parked();
+    assert!(!p.join(".git/MERGE_HEAD").exists(), "merge aborted");
+    cx.update_window(window, |_, window, _| assert!(window.try_find("operation-banner").is_none())).unwrap();
+    assert_eq!(std::fs::read_to_string(p.join("f")).unwrap(), "main\n");
+}
+
+#[gpui_kit::test]
+async fn branches_popup_lists_branches(cx: &mut TestAppContext) {
+    isolate_cache();
+    let repo_dir = demo_repo();
+    cx.update(rsit_app::init);
+    let repo = rsit_git::Repo::discover(repo_dir.path()).unwrap();
+    let (window, _) = cx.update(|cx| {
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(Bounds { origin: point(px(0.), px(0.)), size: size(px(1400.), px(800.)) })),
+            ..Default::default()
+        };
+        gpui_kit::open_window(options, cx, |window, cx| {
+            cx.new(|cx| rsit_app::workspace::Workspace::new(repo, Default::default(), false, window, cx))
+        })
+        .unwrap()
+    });
+    let window: gpui_kit::AnyWindowHandle = window;
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| window.click("branches", cx)).unwrap();
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, _| {
+        let menu = window.within("popup-menu");
+        let labels: Vec<String> = (0..20usize)
+            .filter_map(|i| menu.try_find(i).and_then(|item| item.label().map(str::to_string)))
+            .collect();
+        assert!(labels.iter().any(|l| l == "Update Project"), "{labels:?}");
+        assert!(labels.iter().any(|l| l == "★ main"), "{labels:?}");
+        assert!(labels.iter().any(|l| l == "feature"), "{labels:?}");
+    })
+    .unwrap();
 }

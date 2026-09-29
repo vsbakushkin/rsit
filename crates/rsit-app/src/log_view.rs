@@ -44,6 +44,11 @@ pub fn init(cx: &mut App) {
     ]);
 }
 
+/// Emitted after the history was (re)loaded, e.g. when refs changed.
+pub struct LogLoaded;
+
+impl EventEmitter<LogLoaded> for LogView {}
+
 pub struct LogView {
     repo: Repo,
     /// Latest loaded history.
@@ -212,6 +217,7 @@ impl LogView {
         .into();
         self.data = Some(Arc::new(data));
         self.apply_filter(cx);
+        cx.emit(LogLoaded);
     }
 
     // ---- filtering ----
@@ -604,7 +610,7 @@ impl LogView {
                             .track_scroll(&self.scroll)
                             .size_full(),
                     )
-                    .context_menu(move |menu, _, cx| crate::commit_menu::build(menu, view.clone(), cx))
+                    .context_menu(move |menu, window, cx| crate::commit_menu::build(menu, view.clone(), window, cx))
             })
     }
 
@@ -725,6 +731,13 @@ impl LogView {
                                     this.navigate_to(target, window, cx);
                                 }
                             }))
+                            .context_menu({
+                                let (repo, name, current) =
+                                    (self.repo.clone(), r.name.clone(), data.refs.current_branch.clone());
+                                move |menu, _, _| {
+                                    crate::git_actions::branch_menu(menu, &repo, &name, kind, current.as_deref())
+                                }
+                            })
                             .into_any_element(),
                     );
                 }

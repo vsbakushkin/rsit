@@ -59,7 +59,7 @@ fn main() {
         }
     };
 
-    gpui_kit::application().with_assets(gpui_kit::assets::Assets).run(move |cx| {
+    gpui_kit::application().with_assets(rsit_app::AppAssets).run(move |cx| {
         rsit_app::init(cx);
         if let Some((commit, files)) = diff {
             cx.bind_keys([KeyBinding::new("ctrl-q", Quit, None)]);

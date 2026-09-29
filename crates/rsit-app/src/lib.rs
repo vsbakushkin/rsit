@@ -5,8 +5,10 @@ pub mod commit_menu;
 pub mod commit_panel;
 pub mod diff_model;
 pub mod diff_view;
+pub mod git_actions;
 pub mod graph_paint;
 pub mod log_view;
+pub mod tasks;
 pub mod workspace;
 
 /// Initializes gpui-kit and rsit key bindings.
@@ -16,4 +18,25 @@ pub fn init(cx: &mut gpui_kit::App) {
     diff_view::init(cx);
     commit_panel::init(cx);
     workspace::init(cx);
+}
+
+gpui_kit::assets::icon_assets!(ExtraIcons, [GitBranch, ArrowDownToLine, ArrowUpFromLine]);
+
+/// gpui-kit's component icons plus the extra Lucide icons rsit uses.
+pub struct AppAssets;
+
+impl gpui_kit::AssetSource for AppAssets {
+    fn load(&self, path: &str) -> gpui_kit::Result<Option<std::borrow::Cow<'static, [u8]>>> {
+        // the default bundle errors on unknown paths, so ask the extras first
+        match ExtraIcons.load(path)? {
+            Some(data) => Ok(Some(data)),
+            None => gpui_kit::assets::Assets.load(path),
+        }
+    }
+
+    fn list(&self, path: &str) -> gpui_kit::Result<Vec<gpui_kit::SharedString>> {
+        let mut all = gpui_kit::assets::Assets.list(path)?;
+        all.extend(ExtraIcons.list(path)?);
+        Ok(all)
+    }
 }

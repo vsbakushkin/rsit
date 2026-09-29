@@ -13,6 +13,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use gpui_kit::assets::IconName;
 use rsit_git::changes::{Status, StatusEntry};
+use rsit_git::ops::Operation;
 use rsit_git::{ChangeKind, FileChange, Repo, Revision};
 
 use crate::diff_model::{ChangeAction, DiffItem};
@@ -65,6 +66,8 @@ impl Group {
 pub struct CommitPanel {
     repo: Repo,
     status: Status,
+    /// A merge/rebase/cherry-pick/revert waiting to be continued or aborted.
+    operation: Option<Operation>,
     loaded: bool,
     selected: Option<(Group, String)>,
     message: Entity<TextareaState>,
@@ -95,6 +98,7 @@ impl CommitPanel {
         let mut this = Self {
             repo,
             status: Status::default(),
+            operation: None,
             loaded: false,
             selected: None,
             message,
@@ -133,10 +137,15 @@ impl CommitPanel {
     }
 
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
-        let cwd = self.repo.cwd().to_path_buf();
+        let repo = self.repo.clone();
         self._refresh = Some(cx.spawn(async move |this, cx| {
-            let status = cx.background_spawn(async move { rsit_git::changes::status(&cwd) }).await;
+            let (status, operation) = cx
+                .background_spawn(async move {
+                    (rsit_git::changes::status(repo.cwd()), rsit_git::ops::operation_in_progress(&repo))
+                })
+                .await;
             this.update(cx, |this, cx| {
+                this.operation = operation;
                 match status {
                     Ok(status) => {
                         this.status = status;
@@ -237,6 +246,69 @@ impl CommitPanel {
                 true
             })
         });
+    }
+
+    fn finish_operation(&mut self, abort: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(op) = self.operation else { return };
+        let (verb, done) = if abort { ("Aborting", "aborted") } else { ("Continuing", "completed") };
+        let success = format!("{} {done}", op.name());
+        crate::tasks::run_git_task(
+            format!("{verb} {}", op.name().to_lowercase()),
+            self.repo.cwd().to_path_buf(),
+            Some(success),
+            Box::new(move |cwd, _| {
+                if abort {
+                    rsit_git::ops::abort_operation(cwd, op).map(|_| String::new())
+                } else {
+                    rsit_git::ops::continue_operation(cwd, op)
+                }
+            }),
+            window,
+            cx,
+        );
+    }
+
+    fn render_operation(&mut self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let op = self.operation?;
+        let theme = cx.theme();
+        let conflicts = self.status.conflicted().count();
+        let text = if conflicts > 0 {
+            format!("{} in progress: {conflicts} conflict{}", op.name(), if conflicts == 1 { "" } else { "s" })
+        } else {
+            format!("{} in progress", op.name())
+        };
+        Some(
+            div()
+                .id("operation-banner")
+                .test_support()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap_1()
+                .px_2()
+                .py_1()
+                .bg(theme.warning.opacity(0.15))
+                .border_b_1()
+                .border_color(theme.border)
+                .child(div().flex_1().min_w(px(160.)).child(text))
+                .when(op != Operation::Other, |d| {
+                    d.child(
+                        Button::new("continue-operation")
+                            .xsmall()
+                            .outline()
+                            .label("Continue")
+                            .disabled(conflicts > 0)
+                            .on_click(cx.listener(|this, _, window, cx| this.finish_operation(false, window, cx))),
+                    )
+                    .child(
+                        Button::new("abort-operation")
+                            .xsmall()
+                            .ghost()
+                            .label("Abort")
+                            .on_click(cx.listener(|this, _, window, cx| this.finish_operation(true, window, cx))),
+                    )
+                }),
+        )
     }
 
     fn set_amend(&mut self, amend: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -569,6 +641,7 @@ impl Render for CommitPanel {
                             .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
                     ),
             )
+            .children(self.render_operation(cx))
             .child(self.render_changes(cx))
             .child(
                 div()

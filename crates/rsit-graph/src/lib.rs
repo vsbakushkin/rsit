@@ -100,6 +100,31 @@ impl<Id: Clone + Eq + Hash> PermanentGraph<Id> {
         visited
     }
 
+    /// Nodes of `branch_heads` from which `node` is reachable
+    /// (IntelliJ `ReachableNodes.getContainingBranches`).
+    pub fn containing_branches(&self, node: u32, branch_heads: &std::collections::HashSet<u32>) -> Vec<u32> {
+        let mut visited = vec![false; self.len()];
+        let mut stack = vec![node];
+        let mut result = Vec::new();
+        let mut up = Vec::new();
+        visited[node as usize] = true;
+        while let Some(n) = stack.pop() {
+            if branch_heads.contains(&n) {
+                result.push(n);
+            }
+            up.clear();
+            self.linear.adjacent_edges(n, EdgeFilter::NORMAL_UP, &mut up);
+            for child in up.iter().filter_map(|e| e.up) {
+                if !visited[child as usize] {
+                    visited[child as usize] = true;
+                    stack.push(child);
+                }
+            }
+        }
+        result.sort_unstable();
+        result
+    }
+
     pub fn children(&self, node: u32) -> Vec<u32> {
         self.linear.up_nodes(node)
     }

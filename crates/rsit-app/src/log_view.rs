@@ -52,6 +52,8 @@ pub struct LogView {
     meta: MetaCache,
     selected: Option<u32>,
     changes: Vec<FileChange>,
+    /// Branches containing the selected commit; `None` while computing.
+    containing: Option<Vec<String>>,
     scroll: UniformListScrollHandle,
     focus: FocusHandle,
     text_input: Entity<InputState>,
@@ -112,6 +114,7 @@ impl LogView {
             filter,
             selected: None,
             changes: Vec::new(),
+            containing: None,
             scroll: UniformListScrollHandle::new(),
             focus,
             text_input,
@@ -330,13 +333,24 @@ impl LogView {
         }
         self.selected = Some(row);
         self.changes.clear();
+        self.containing = None;
         let repo = self.repo.clone();
         let id = graph.id(row);
+        let data = graph.data.clone();
+        let permanent = graph.permanent_row(row);
         self._changes = Some(cx.spawn(async move |this, cx| {
             let changes = cx.background_spawn(async move { rsit_git::changed_files(&repo.local(), id) }).await;
             this.update(cx, |this, cx| {
                 if this.selected_id() == Some(id) {
                     this.changes = changes.unwrap_or_default();
+                    cx.notify();
+                }
+            })
+            .ok();
+            let containing = cx.background_spawn(async move { data.containing_branches(permanent) }).await;
+            this.update(cx, |this, cx| {
+                if this.selected_id() == Some(id) {
+                    this.containing = Some(containing);
                     cx.notify();
                 }
             })
@@ -726,6 +740,7 @@ impl LogView {
                     }
                 }))
         });
+        let containing = self.containing.clone();
         let details = meta.map(|(meta, data)| {
             let parents = meta.parents.clone();
             let refs: Vec<String> =
@@ -762,6 +777,18 @@ impl LogView {
                     ))
                 })
                 .when(!refs.is_empty(), |d| d.child(div().text_color(muted).child(format!("refs: {}", refs.join(", ")))))
+                .child(div().text_color(muted).whitespace_normal().child(match &containing {
+                    None => "In branches: computing…".to_string(),
+                    Some(b) if b.is_empty() => "In no branches".to_string(),
+                    Some(b) => {
+                        const SHOWN: usize = 12;
+                        let mut text = format!("In {} branch{}: {}", b.len(), if b.len() == 1 { "" } else { "es" }, b[..b.len().min(SHOWN)].join(", "));
+                        if b.len() > SHOWN {
+                            text.push_str(&format!(" and {} more", b.len() - SHOWN));
+                        }
+                        text
+                    }
+                }))
         });
         v_resizable("details")
             .child(

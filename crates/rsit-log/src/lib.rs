@@ -131,6 +131,27 @@ impl LogData {
         self.graph.color_id(element, |row| self.head_names.get(row).map(String::as_str))
     }
 
+    /// Names of local and remote branches containing the commit at `row`,
+    /// in label order.
+    pub fn containing_branches(&self, row: u32) -> Vec<String> {
+        let heads: std::collections::HashSet<u32> = self
+            .refs
+            .refs
+            .iter()
+            .filter(|r| matches!(r.kind, RefKind::LocalBranch | RefKind::RemoteBranch))
+            .filter_map(|r| self.row_of(&r.target))
+            .collect();
+        let mut refs: Vec<&Ref> = self
+            .graph
+            .containing_branches(row, &heads)
+            .into_iter()
+            .flat_map(|head| self.refs_at(head))
+            .filter(|r| matches!(r.kind, RefKind::LocalBranch | RefKind::RemoteBranch))
+            .collect();
+        refs.sort_by(|a, b| self.refs.label_cmp(a, b));
+        refs.into_iter().map(|r| r.name.clone()).collect()
+    }
+
     /// Rows of the direct parents that are loaded.
     pub fn parent_rows(&self, row: u32) -> impl Iterator<Item = u32> + '_ {
         self.commits.parents[row as usize].iter().copied().filter(|&p| p != u32::MAX)

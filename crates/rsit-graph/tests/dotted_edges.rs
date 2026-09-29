@@ -86,3 +86,16 @@ fn fork() {
         "0(2)\n1(5.dot)\n2(5.dot)\n5()",
     );
 }
+
+#[test]
+fn containing_branches() {
+    // 0 -> 2, 1 -> 2, 2 -> 3 ; heads 0 and 1
+    let commits: Vec<GraphCommit<u32>> = [(0, vec![2]), (1, vec![2]), (2, vec![3]), (3, vec![])]
+        .into_iter()
+        .map(|(id, parents)| GraphCommit { id, parents })
+        .collect();
+    let graph = rsit_graph::PermanentGraph::new(&commits, [0, 1], |a, b| a.cmp(b));
+    let heads = [0u32, 1].into_iter().collect();
+    assert_eq!(graph.containing_branches(3, &heads), vec![0, 1]);
+    assert_eq!(graph.containing_branches(1, &heads), vec![1]);
+}

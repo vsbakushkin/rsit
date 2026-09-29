@@ -3,6 +3,7 @@
 
 pub mod changes;
 pub mod cli;
+pub mod ops;
 mod graph;
 mod refs;
 

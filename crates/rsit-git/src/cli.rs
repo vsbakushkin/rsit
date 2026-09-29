@@ -11,6 +11,8 @@ pub fn git(cwd: &Path) -> Command {
     cmd.current_dir(cwd)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("LC_ALL", "C")
+        // never open an interactive editor; callers that need one set their own
+        .env("GIT_EDITOR", "true")
         .arg("-c")
         .arg("color.ui=false")
         .arg("-c")

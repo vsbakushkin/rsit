@@ -1,7 +1,7 @@
 //! Port of IntelliJ `DottedFilterEdgesGeneratorTest`.
 
-use rsit_graph::linear::{EdgeFilter, EdgeType, GraphCommit, LinearGraph, PermanentLinearGraph};
 use rsit_graph::FilteredGraph;
+use rsit_graph::linear::{EdgeFilter, EdgeType, GraphCommit, LinearGraph, PermanentLinearGraph};
 
 /// `spec`: (label, matched, children labels) in row order.
 fn check(spec: &[(u32, bool, &[u32])], expected: &str) {
@@ -14,11 +14,8 @@ fn check(spec: &[(u32, bool, &[u32])], expected: &str) {
     let label = |row: u32| spec[filtered.to_delegate(row) as usize].0;
     let mut lines = Vec::new();
     for row in 0..view.nodes_count() as u32 {
-        let mut downs: Vec<(u32, EdgeType)> = view
-            .edges(row, EdgeFilter::NORMAL_DOWN)
-            .iter()
-            .map(|e| (label(e.down.unwrap()), e.ty))
-            .collect();
+        let mut downs: Vec<(u32, EdgeType)> =
+            view.edges(row, EdgeFilter::NORMAL_DOWN).iter().map(|e| (label(e.down.unwrap()), e.ty)).collect();
         downs.sort_by_key(|d| d.0);
         let downs: Vec<String> = downs
             .iter()

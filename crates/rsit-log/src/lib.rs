@@ -85,15 +85,10 @@ impl LogData {
             .collect();
 
         // IntelliJ: branch heads are the targets of branch refs (tags are not branches)
-        let branch_rows: Vec<u32> = refs
-            .refs
-            .iter()
-            .filter(|r| r.kind != RefKind::Tag)
-            .filter_map(|r| commits.row_of(&r.target))
-            .collect();
-        let best_ref = |row: u32| -> Option<&Ref> {
-            refs_by_row.get(&row)?.iter().min_by(|a, b| refs.layout_cmp(a, b))
-        };
+        let branch_rows: Vec<u32> =
+            refs.refs.iter().filter(|r| r.kind != RefKind::Tag).filter_map(|r| commits.row_of(&r.target)).collect();
+        let best_ref =
+            |row: u32| -> Option<&Ref> { refs_by_row.get(&row)?.iter().min_by(|a, b| refs.layout_cmp(a, b)) };
         // HeadCommitsComparator: heads with refs first, by the branch layout comparator
         let head_cmp = |a: &u32, b: &u32| -> Ordering {
             match (best_ref(*a), best_ref(*b)) {
@@ -104,12 +99,8 @@ impl LogData {
             }
         };
         let graph = PermanentGraph::new(&graph_commits, branch_rows, head_cmp);
-        let head_names = graph
-            .layout
-            .head_nodes()
-            .iter()
-            .filter_map(|&h| Some((h, best_ref(h)?.name.clone())))
-            .collect();
+        let head_names =
+            graph.layout.head_nodes().iter().filter_map(|&h| Some((h, best_ref(h)?.name.clone()))).collect();
 
         Self { repo, refs, commits, graph, refs_by_row, head_names, partial }
     }

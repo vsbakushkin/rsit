@@ -157,9 +157,9 @@ pub fn element_at(elements: &[PrintElement], x: f32, y: f32) -> Option<&PrintEle
     let row_center = (ROW_HEIGHT / 2.0).floor();
     let element_center = (LANE_WIDTH / 2.0).floor();
     let center_x = |pos: u32| LANE_WIDTH * pos as f32 + element_center;
-    let node = elements.iter().find(|e| {
-        e.kind == PrintKind::Node && (center_x(e.pos) - x).hypot(row_center - y) <= CIRCLE_RADIUS
-    });
+    let node = elements
+        .iter()
+        .find(|e| e.kind == PrintKind::Node && (center_x(e.pos) - x).hypot(row_center - y) <= CIRCLE_RADIUS);
     node.or_else(|| {
         elements.iter().find(|e| {
             let dir = match e.kind {
@@ -176,7 +176,9 @@ pub fn element_at(elements: &[PrintElement], x: f32, y: f32) -> Option<&PrintEle
 
 /// Row an arrow leads to: the far end of a long edge whose middle is hidden.
 pub fn arrow_target(element: &PrintElement) -> Option<u32> {
-    let rsit_graph::GraphElement::Edge(edge) = element.element else { return None };
+    let rsit_graph::GraphElement::Edge(edge) = element.element else {
+        return None;
+    };
     match element.kind {
         PrintKind::Edge { arrow: true, dir, .. } | PrintKind::Terminal { dir } => match dir {
             EdgeDir::Down => edge.down,

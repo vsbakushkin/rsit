@@ -138,7 +138,11 @@ pub fn compare_words(left: &str, right: &str, policy: WhitespacePolicy) -> Optio
     // with whitespace ignored, whitespace runs are equal to each other
     let tok = |interner: &mut Interner, text: &str, r: &Range<usize>| {
         let s = &text[r.clone()];
-        if ignore_ws && s.chars().all(char::is_whitespace) { interner.intern(" ".into()) } else { interner.intern(s.into()) }
+        if ignore_ws && s.chars().all(char::is_whitespace) {
+            interner.intern(" ".into())
+        } else {
+            interner.intern(s.into())
+        }
     };
     let before: Vec<Token> = lt.iter().map(|r| tok(&mut interner, left, r)).collect();
     let after: Vec<Token> = rt.iter().map(|r| tok(&mut interner, right, r)).collect();

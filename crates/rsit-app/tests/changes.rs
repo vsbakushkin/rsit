@@ -38,15 +38,19 @@ fn repo() -> tempfile::TempDir {
 fn status_stage_and_commit() {
     let dir = repo();
     let p = dir.path();
-    std::fs::write(p.join("a.txt"), std::fs::read_to_string(p.join("a.txt")).unwrap().replace("line 3\n", "line three\n")).unwrap();
+    std::fs::write(
+        p.join("a.txt"),
+        std::fs::read_to_string(p.join("a.txt")).unwrap().replace("line 3\n", "line three\n"),
+    )
+    .unwrap();
     std::fs::remove_file(p.join("gone.txt")).unwrap();
     std::fs::write(p.join("new.txt"), "n\n").unwrap();
 
     let s = changes::status(p).unwrap();
-    assert_eq!(s.unstaged().map(|e| (e.path.as_str(), e.unstaged)).collect::<Vec<_>>(), [
-        ("a.txt", Some(ChangeKind::Modified)),
-        ("gone.txt", Some(ChangeKind::Deleted))
-    ]);
+    assert_eq!(
+        s.unstaged().map(|e| (e.path.as_str(), e.unstaged)).collect::<Vec<_>>(),
+        [("a.txt", Some(ChangeKind::Modified)), ("gone.txt", Some(ChangeKind::Deleted))]
+    );
     assert_eq!(s.untracked().map(|e| e.path.as_str()).collect::<Vec<_>>(), ["new.txt"]);
 
     changes::stage(p, &["gone.txt".into(), "new.txt".into()]).unwrap();
@@ -70,7 +74,10 @@ fn status_stage_and_commit() {
 fn stage_and_unstage_one_change() {
     let dir = repo();
     let p = dir.path();
-    let edited = std::fs::read_to_string(p.join("a.txt")).unwrap().replace("line 3\n", "line three\n").replace("line 15\n", "line fifteen\nextra\n");
+    let edited = std::fs::read_to_string(p.join("a.txt"))
+        .unwrap()
+        .replace("line 3\n", "line three\n")
+        .replace("line 15\n", "line fifteen\nextra\n");
     std::fs::write(p.join("a.txt"), &edited).unwrap();
     let repo = rsit_git::Repo::discover(p).unwrap();
     let text = |rev| String::from_utf8(rsit_git::file_at_revision(&repo, rev, "a.txt").unwrap().unwrap()).unwrap();

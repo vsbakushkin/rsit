@@ -22,8 +22,7 @@ impl GraphLayout {
     ) -> Self {
         // same order as Kotlin `branches + heads` (a LinkedHashSet), then a stable sort
         let mut seen = std::collections::HashSet::new();
-        let mut all_heads: Vec<u32> =
-            branches.into_iter().chain(heads(graph)).filter(|h| seen.insert(*h)).collect();
+        let mut all_heads: Vec<u32> = branches.into_iter().chain(heads(graph)).filter(|h| seen.insert(*h)).collect();
         all_heads.sort_by(|a, b| head_cmp(*a, *b));
 
         let mut layout_index = vec![0u32; graph.nodes_count()];

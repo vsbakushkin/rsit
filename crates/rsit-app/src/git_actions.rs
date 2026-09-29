@@ -33,7 +33,9 @@ pub fn update(repo: &Repo, window: &mut Window, cx: &mut App) {
 /// Pushes the current branch to its upstream, or to the first remote with
 /// `--set-upstream` on its first push.
 pub fn push_current(repo: &Repo, force: bool, window: &mut Window, cx: &mut App) {
-    let Ok(refs) = rsit_git::read_refs(&repo.local()) else { return };
+    let Ok(refs) = rsit_git::read_refs(&repo.local()) else {
+        return;
+    };
     let Some(branch) = refs.current_branch.clone() else {
         window.push_notification(
             gpui_kit::component::notification::Notification::warning("HEAD is detached: nothing to push"),
@@ -52,7 +54,9 @@ pub fn push_current(repo: &Repo, force: bool, window: &mut Window, cx: &mut App)
                 let upstream = ops::upstream(cwd, &branch);
                 let remote = match &upstream {
                     Some(u) => u.split_once('/').map(|(r, _)| r.to_string()).unwrap_or_else(|| "origin".into()),
-                    None => ops::remotes(cwd)?.into_iter().next().ok_or_else(|| anyhow::anyhow!("no remotes configured"))?,
+                    None => {
+                        ops::remotes(cwd)?.into_iter().next().ok_or_else(|| anyhow::anyhow!("no remotes configured"))?
+                    }
                 };
                 ops::push(cwd, &remote, &branch, upstream.is_none(), force, p)
             },
@@ -81,18 +85,25 @@ pub fn checkout(repo: &Repo, name: String, remote: bool, window: &mut Window, cx
 
 pub fn new_branch_from(repo: &Repo, rev: String, window: &mut Window, cx: &mut App) {
     let repo = repo.clone();
-    prompt_name(&format!("New Branch from {rev}"), "Create", Some("Checkout branch"), window, cx, move |name, checkout, window, cx| {
-        let rev = rev.clone();
-        let success = format!("Created branch {name}");
-        task(
-            &repo,
-            format!("Creating {name}"),
-            Some(success),
-            move |cwd, _| rsit_git::cli::create_branch(cwd, &name, &rev, checkout),
-            window,
-            cx,
-        );
-    });
+    prompt_name(
+        &format!("New Branch from {rev}"),
+        "Create",
+        Some("Checkout branch"),
+        window,
+        cx,
+        move |name, checkout, window, cx| {
+            let rev = rev.clone();
+            let success = format!("Created branch {name}");
+            task(
+                &repo,
+                format!("Creating {name}"),
+                Some(success),
+                move |cwd, _| rsit_git::cli::create_branch(cwd, &name, &rev, checkout),
+                window,
+                cx,
+            );
+        },
+    );
 }
 
 pub fn merge_into_current(repo: &Repo, name: String, window: &mut Window, cx: &mut App) {
@@ -110,7 +121,14 @@ pub fn rename_branch(repo: &Repo, name: String, window: &mut Window, cx: &mut Ap
     let title = format!("Rename {name}");
     prompt_name_with(&title, "Rename", None, &name.clone(), window, cx, move |new, _, window, cx| {
         let old = name.clone();
-        task(&repo, "Renaming branch", None, move |cwd, _| ops::rename_branch(cwd, &old, &new).map(|_| String::new()), window, cx);
+        task(
+            &repo,
+            "Renaming branch",
+            None,
+            move |cwd, _| ops::rename_branch(cwd, &old, &new).map(|_| String::new()),
+            window,
+            cx,
+        );
     });
 }
 
@@ -129,7 +147,14 @@ pub fn delete_branch(repo: &Repo, name: String, window: &mut Window, cx: &mut Ap
                     confirm("Delete Branch", &detail, window, cx, move |window, cx| {
                         let name = name.clone();
                         let success = format!("Deleted branch {name}");
-                        task(&repo, "Deleting branch", Some(success), move |cwd, _| ops::delete_branch(cwd, &name, true).map(|_| String::new()), window, cx);
+                        task(
+                            &repo,
+                            "Deleting branch",
+                            Some(success),
+                            move |cwd, _| ops::delete_branch(cwd, &name, true).map(|_| String::new()),
+                            window,
+                            cx,
+                        );
                     });
                 }
             })
@@ -144,7 +169,14 @@ pub fn delete_remote_branch(repo: &Repo, name: String, window: &mut Window, cx: 
     confirm("Delete Remote Branch", &detail, window, cx, move |window, cx| {
         let name = name.clone();
         let success = format!("Deleted {name}");
-        task(&repo, format!("Deleting {name}"), Some(success), move |cwd, p| ops::delete_remote_branch(cwd, &name, p).map(|_| String::new()), window, cx);
+        task(
+            &repo,
+            format!("Deleting {name}"),
+            Some(success),
+            move |cwd, p| ops::delete_remote_branch(cwd, &name, p).map(|_| String::new()),
+            window,
+            cx,
+        );
     });
 }
 
@@ -188,7 +220,10 @@ pub fn branch_menu(menu: PopupMenu, repo: &Repo, name: &str, kind: RefKind, curr
             let remote = kind == RefKind::RemoteBranch;
             if !is_current {
                 let (repo, n) = (repo.clone(), name.to_string());
-                menu = menu.item(PopupMenuItem::new("Checkout").on_click(move |_, window, cx| checkout(&repo, n.clone(), remote, window, cx)));
+                menu = menu.item(
+                    PopupMenuItem::new("Checkout")
+                        .on_click(move |_, window, cx| checkout(&repo, n.clone(), remote, window, cx)),
+                );
             }
             menu = menu.item(item(format!("New Branch from '{name}'…"), new_branch_from));
             if !is_current && current.is_some() {
@@ -208,7 +243,10 @@ pub fn branch_menu(menu: PopupMenu, repo: &Repo, name: &str, kind: RefKind, curr
             }
         }
         RefKind::Tag => {
-            menu = menu.item(item(format!("New Branch from '{name}'…"), new_branch_from)).separator().item(item("Delete Tag…".into(), delete_tag));
+            menu = menu
+                .item(item(format!("New Branch from '{name}'…"), new_branch_from))
+                .separator()
+                .item(item("Delete Tag…".into(), delete_tag));
         }
         RefKind::Head | RefKind::Other => {}
     }

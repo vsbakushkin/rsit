@@ -96,10 +96,8 @@ pub fn run_git_task(
                             window.push_notification(Notification::success(message), cx);
                         }
                     }
-                    Err(e) => window.push_notification(
-                        Notification::error(format!("{label} failed: {e:#}")).autohide(false),
-                        cx,
-                    ),
+                    Err(e) => window
+                        .push_notification(Notification::error(format!("{label} failed: {e:#}")).autohide(false), cx),
                 }
             })
             .ok();

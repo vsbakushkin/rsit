@@ -90,11 +90,10 @@ fn main() {
             app_id: Some("rsit".into()),
             ..Default::default()
         };
-        let (main_window, _) =
-            gpui_kit::open_window(options, cx, |window, cx| {
-                cx.new(|cx| rsit_app::workspace::Workspace::new(repo, filter, true, window, cx))
-            })
-                .expect("failed to open window");
+        let (main_window, _) = gpui_kit::open_window(options, cx, |window, cx| {
+            cx.new(|cx| rsit_app::workspace::Workspace::new(repo, filter, true, window, cx))
+        })
+        .expect("failed to open window");
         // closing the log window quits, diff windows are secondary
         cx.on_window_closed(move |cx, closed| {
             if closed == main_window.window_id() {

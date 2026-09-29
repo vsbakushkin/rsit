@@ -40,7 +40,10 @@ mod tests {
     fn patches() {
         let (left, right) = ("a\nb\nc\n", "a\nB\nc\nd");
         let f = compare(left, right, WhitespacePolicy::Default);
-        assert_eq!(fragment_patch("x", left, right, &f[0]), "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -2,1 +2,1 @@\n-b\n+B\n");
+        assert_eq!(
+            fragment_patch("x", left, right, &f[0]),
+            "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -2,1 +2,1 @@\n-b\n+B\n"
+        );
         assert_eq!(
             fragment_patch("x", left, right, &f[1]),
             "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -3,0 +4,1 @@\n+d\n\\ No newline at end of file\n"

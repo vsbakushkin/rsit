@@ -171,10 +171,14 @@ impl<G: LinearGraph> LinearGraph for FilteredView<'_, G> {
                 out.push(GraphEdge { up, down, ..e });
             }
         }
-        let Some(extra) = self.filter.extra.get(&delegate_index) else { return };
+        let Some(extra) = self.filter.extra.get(&delegate_index) else {
+            return;
+        };
         for &(other, ty) in extra {
             if ty.is_normal() {
-                let Some(other) = other.and_then(|o| self.filter.from_delegate(o)) else { continue };
+                let Some(other) = other.and_then(|o| self.filter.from_delegate(o)) else {
+                    continue;
+                };
                 let edge = GraphEdge::normal(node.min(other), node.max(other), ty);
                 let pass = if edge.down == Some(node) { filter.up_normal } else { filter.down_normal };
                 if pass {

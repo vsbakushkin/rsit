@@ -165,7 +165,8 @@ pub fn unstage(cwd: &Path, paths: &[String], has_head: bool) -> Result<()> {
 /// Discards working tree changes of tracked paths (IntelliJ "Rollback").
 /// With `staged` also resets the index to HEAD for them.
 pub fn rollback(cwd: &Path, paths: &[String], staged: bool) -> Result<()> {
-    let args: &[&str] = if staged { &["restore", "--staged", "--worktree", "--source=HEAD"] } else { &["restore", "--worktree"] };
+    let args: &[&str] =
+        if staged { &["restore", "--staged", "--worktree", "--source=HEAD"] } else { &["restore", "--worktree"] };
     run(cwd, &with_paths(args, paths)).map(drop)
 }
 

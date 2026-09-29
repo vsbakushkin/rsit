@@ -106,7 +106,14 @@ pub fn pull(cwd: &Path, progress: impl FnMut(&str)) -> Result<String> {
 }
 
 /// Pushes the current branch; sets the upstream on its first push.
-pub fn push(cwd: &Path, remote: &str, branch: &str, set_upstream: bool, force: bool, progress: impl FnMut(&str)) -> Result<String> {
+pub fn push(
+    cwd: &Path,
+    remote: &str,
+    branch: &str,
+    set_upstream: bool,
+    force: bool,
+    progress: impl FnMut(&str),
+) -> Result<String> {
     let mut args = vec!["push", "--progress", "--porcelain"];
     if set_upstream {
         args.push("--set-upstream");

@@ -61,7 +61,10 @@ fn open_view(cx: &mut TestAppContext, repo: &Path) -> (gpui_kit::AnyWindowHandle
     let repo = rsit_git::Repo::discover(repo).unwrap();
     cx.update(|cx| {
         let options = WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(Bounds { origin: point(px(0.), px(0.)), size: size(px(1200.), px(800.)) })),
+            window_bounds: Some(WindowBounds::Windowed(Bounds {
+                origin: point(px(0.), px(0.)),
+                size: size(px(1200.), px(800.)),
+            })),
             ..Default::default()
         };
         let (window, view) = gpui_kit::open_window(options, cx, |window, cx| {
@@ -193,7 +196,10 @@ async fn diff_view_navigates_and_folds(cx: &mut TestAppContext) {
         .collect();
     let (window, view) = cx.update(|cx| {
         let options = WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(Bounds { origin: point(px(0.), px(0.)), size: size(px(1200.), px(800.)) })),
+            window_bounds: Some(WindowBounds::Windowed(Bounds {
+                origin: point(px(0.), px(0.)),
+                size: size(px(1200.), px(800.)),
+            })),
             ..Default::default()
         };
         gpui_kit::open_window(options, cx, |window, cx| {
@@ -249,7 +255,10 @@ async fn commit_panel_stages_and_commits(cx: &mut TestAppContext) {
     let repo = rsit_git::Repo::discover(p).unwrap();
     let (window, panel) = cx.update(|cx| {
         let options = WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(Bounds { origin: point(px(0.), px(0.)), size: size(px(500.), px(800.)) })),
+            window_bounds: Some(WindowBounds::Windowed(Bounds {
+                origin: point(px(0.), px(0.)),
+                size: size(px(500.), px(800.)),
+            })),
             ..Default::default()
         };
         gpui_kit::open_window(options, cx, |window, cx| {
@@ -309,7 +318,10 @@ async fn diff_stages_a_single_change(cx: &mut TestAppContext) {
     };
     let (window, view) = cx.update(|cx| {
         let options = WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(Bounds { origin: point(px(0.), px(0.)), size: size(px(1200.), px(800.)) })),
+            window_bounds: Some(WindowBounds::Windowed(Bounds {
+                origin: point(px(0.), px(0.)),
+                size: size(px(1200.), px(800.)),
+            })),
             ..Default::default()
         };
         gpui_kit::open_window(options, cx, |window, cx| {
@@ -351,7 +363,10 @@ async fn merge_conflict_banner_aborts(cx: &mut TestAppContext) {
     let repo = rsit_git::Repo::discover(p).unwrap();
     let (window, panel) = cx.update(|cx| {
         let options = WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(Bounds { origin: point(px(0.), px(0.)), size: size(px(500.), px(700.)) })),
+            window_bounds: Some(WindowBounds::Windowed(Bounds {
+                origin: point(px(0.), px(0.)),
+                size: size(px(500.), px(700.)),
+            })),
             ..Default::default()
         };
         gpui_kit::open_window(options, cx, |window, cx| {
@@ -384,7 +399,10 @@ async fn branches_popup_lists_branches(cx: &mut TestAppContext) {
     let repo = rsit_git::Repo::discover(repo_dir.path()).unwrap();
     let (window, _) = cx.update(|cx| {
         let options = WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(Bounds { origin: point(px(0.), px(0.)), size: size(px(1400.), px(800.)) })),
+            window_bounds: Some(WindowBounds::Windowed(Bounds {
+                origin: point(px(0.), px(0.)),
+                size: size(px(1400.), px(800.)),
+            })),
             ..Default::default()
         };
         gpui_kit::open_window(options, cx, |window, cx| {
@@ -398,9 +416,8 @@ async fn branches_popup_lists_branches(cx: &mut TestAppContext) {
     cx.run_until_parked();
     cx.update_window(window, |_, window, _| {
         let menu = window.within("popup-menu");
-        let labels: Vec<String> = (0..20usize)
-            .filter_map(|i| menu.try_find(i).and_then(|item| item.label().map(str::to_string)))
-            .collect();
+        let labels: Vec<String> =
+            (0..20usize).filter_map(|i| menu.try_find(i).and_then(|item| item.label().map(str::to_string))).collect();
         assert!(labels.iter().any(|l| l == "Update Project"), "{labels:?}");
         assert!(labels.iter().any(|l| l == "★ main"), "{labels:?}");
         assert!(labels.iter().any(|l| l == "feature"), "{labels:?}");

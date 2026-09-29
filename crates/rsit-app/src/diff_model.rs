@@ -6,10 +6,10 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use gpui_kit::HighlightStyle;
+use gpui_kit::SharedString;
 use gpui_kit::component::highlighter::{HighlightTheme, Language, SyntaxHighlighter};
 use gpui_kit::component::input::Rope;
 use rsit_diff::{LineFragment, Lines, WhitespacePolicy};
-use gpui_kit::SharedString;
 use rsit_git::{ChangeKind, FileChange, ObjectId, Repo, Revision};
 
 /// Files larger than this are compared but not syntax highlighted.

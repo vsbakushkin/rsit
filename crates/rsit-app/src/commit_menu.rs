@@ -4,12 +4,12 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
+use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::dialog::{DialogAction, DialogClose, DialogFooter};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
-use gpui_kit::component::WindowExt as _;
 use gpui_kit::*;
 use rsit_git::{ObjectId, RefKind};
 
@@ -25,9 +25,18 @@ pub struct MenuTarget {
     pub has_parent: bool,
 }
 
-pub fn build(menu: PopupMenu, view: WeakEntity<LogView>, window: &mut Window, cx: &mut Context<PopupMenu>) -> PopupMenu {
-    let Some(entity) = view.upgrade() else { return menu };
-    let Some(target) = entity.read(cx).menu_target() else { return menu };
+pub fn build(
+    menu: PopupMenu,
+    view: WeakEntity<LogView>,
+    window: &mut Window,
+    cx: &mut Context<PopupMenu>,
+) -> PopupMenu {
+    let Some(entity) = view.upgrade() else {
+        return menu;
+    };
+    let Some(target) = entity.read(cx).menu_target() else {
+        return menu;
+    };
     let id = target.id;
     let short = id.to_hex_with_len(8).to_string();
 
@@ -48,13 +57,13 @@ pub fn build(menu: PopupMenu, view: WeakEntity<LogView>, window: &mut Window, cx
     {
         let view = view.clone();
         let rev = id.to_string();
-        menu = menu.item(
-            PopupMenuItem::new("Checkout Revision").disabled(target.is_head).on_click(move |_, window, cx| {
+        menu = menu.item(PopupMenuItem::new("Checkout Revision").disabled(target.is_head).on_click(
+            move |_, window, cx| {
                 let rev = rev.clone();
                 let label = format!("Checked out {}", &rev[..8]);
                 run(&view, label, move |repo| rsit_git::cli::checkout(repo, &rev), window, cx);
-            }),
-        );
+            },
+        ));
     }
     menu = menu.separator();
     let repo = entity.read(cx).repo().clone();
@@ -62,14 +71,28 @@ pub fn build(menu: PopupMenu, view: WeakEntity<LogView>, window: &mut Window, cx
         let (repo, rev) = (repo.clone(), id.to_string());
         menu = menu.item(PopupMenuItem::new("Cherry-Pick").disabled(target.is_head).on_click(move |_, window, cx| {
             let rev = rev.clone();
-            git_actions::task(&repo, "Cherry-picking", Some("Cherry-picked".into()), move |cwd, _| ops::cherry_pick(cwd, &[rev]), window, cx);
+            git_actions::task(
+                &repo,
+                "Cherry-picking",
+                Some("Cherry-picked".into()),
+                move |cwd, _| ops::cherry_pick(cwd, &[rev]),
+                window,
+                cx,
+            );
         }));
     }
     {
         let (repo, rev) = (repo.clone(), id.to_string());
         menu = menu.item(PopupMenuItem::new("Revert Commit").on_click(move |_, window, cx| {
             let rev = rev.clone();
-            git_actions::task(&repo, "Reverting", Some("Reverted".into()), move |cwd, _| ops::revert(cwd, &[rev]), window, cx);
+            git_actions::task(
+                &repo,
+                "Reverting",
+                Some("Reverted".into()),
+                move |cwd, _| ops::revert(cwd, &[rev]),
+                window,
+                cx,
+            );
         }));
     }
     if target.is_head && target.has_parent {
@@ -82,7 +105,14 @@ pub fn build(menu: PopupMenu, view: WeakEntity<LogView>, window: &mut Window, cx
                 window,
                 cx,
                 move |window, cx| {
-                    git_actions::task(&repo, "Undoing commit", None, |cwd, _| ops::undo_last_commit(cwd).map(|_| String::new()), window, cx)
+                    git_actions::task(
+                        &repo,
+                        "Undoing commit",
+                        None,
+                        |cwd, _| ops::undo_last_commit(cwd).map(|_| String::new()),
+                        window,
+                        cx,
+                    )
                 },
             );
         }));
@@ -103,7 +133,14 @@ pub fn build(menu: PopupMenu, view: WeakEntity<LogView>, window: &mut Window, cx
                     let (repo, rev) = (repo.clone(), rev.clone());
                     let run = move |window: &mut Window, cx: &mut App| {
                         let rev = rev.clone();
-                        git_actions::task(&repo, "Resetting", None, move |cwd, _| ops::reset(cwd, &rev, mode).map(|_| String::new()), window, cx);
+                        git_actions::task(
+                            &repo,
+                            "Resetting",
+                            None,
+                            move |cwd, _| ops::reset(cwd, &rev, mode).map(|_| String::new()),
+                            window,
+                            cx,
+                        );
                     };
                     if mode == ResetMode::Hard {
                         let detail = format!("Reset the current branch to {short} and discard all local changes?");

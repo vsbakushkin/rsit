@@ -2,7 +2,9 @@
 
 use std::collections::HashMap;
 
-use rsit_graph::linear::{EdgeFilter, EdgeType, GraphCommit, GraphEdge, GraphElement, LinearGraph, PermanentLinearGraph};
+use rsit_graph::linear::{
+    EdgeFilter, EdgeType, GraphCommit, GraphEdge, GraphElement, LinearGraph, PermanentLinearGraph,
+};
 use rsit_graph::print::{EdgeDir, PrintElementGenerator, PrintKind};
 use rsit_graph::{GraphLayout, edges_in_row::EdgesInRowGenerator};
 
@@ -10,9 +12,7 @@ const SEP: &str = "|-";
 
 fn load(dir: &str, name: &str) -> (String, String) {
     let base = format!("{}/tests/data/{dir}/{name}", env!("CARGO_MANIFEST_DIR"));
-    let read = |suffix: &str| {
-        std::fs::read_to_string(format!("{base}_{suffix}.txt")).unwrap().replace("\r\n", "\n")
-    };
+    let read = |suffix: &str| std::fs::read_to_string(format!("{base}_{suffix}.txt")).unwrap().replace("\r\n", "\n");
     (read("in"), read("out"))
 }
 
@@ -26,10 +26,7 @@ fn parse_commits(input: &str) -> Vec<GraphCommit<String>> {
     lines(input)
         .map(|line| {
             let (id, parents) = line.split_once(SEP).unwrap();
-            GraphCommit {
-                id: id.to_string(),
-                parents: parents.split_whitespace().map(str::to_string).collect(),
-            }
+            GraphCommit { id: id.to_string(), parents: parents.split_whitespace().map(str::to_string).collect() }
         })
         .collect()
 }
@@ -109,7 +106,8 @@ impl LinearGraph for TestGraph {
     }
 
     fn adjacent_edges(&self, node: u32, filter: EdgeFilter, out: &mut Vec<GraphEdge>) {
-        let all = self.up_edges.get(&node).into_iter().flatten().chain(self.down_edges.get(&node).into_iter().flatten());
+        let all =
+            self.up_edges.get(&node).into_iter().flatten().chain(self.down_edges.get(&node).into_iter().flatten());
         for e in all {
             let pass = match e.as_normal() {
                 None => filter.special,
@@ -229,7 +227,11 @@ fn edges_in_row() {
                 edges.sort_by(|a, b| {
                     rsit_graph::print::compare_elements(&GraphElement::Edge(*a), &GraphElement::Edge(*b), &|_| 0)
                 });
-                edges.iter().map(|e| format!("{}_{}_{}", opt(e.up), opt(e.down), edge_char(e.ty))).collect::<Vec<_>>().join(" ")
+                edges
+                    .iter()
+                    .map(|e| format!("{}_{}_{}", opt(e.up), opt(e.down), edge_char(e.ty)))
+                    .collect::<Vec<_>>()
+                    .join(" ")
             })
             .collect();
         assert_eq!(actual.join("\n"), expected.trim_end_matches('\n'), "edgesInRow/{name}");
@@ -269,7 +271,9 @@ fn element_generator_test(name: &str, long_edge: u32, visible_part: u32, arrow_s
             .map(|p| {
                 let el = element_str(&p.element);
                 match p.kind {
-                    PrintKind::Node => format!("Node{SEP}{row}:{}{SEP}{}:Unselect({el})", p.pos, p.color_id),
+                    PrintKind::Node => {
+                        format!("Node{SEP}{row}:{}{SEP}{}:Unselect({el})", p.pos, p.color_id)
+                    }
                     PrintKind::Edge { dir, .. } | PrintKind::Terminal { dir } => {
                         let arrow = match p.kind {
                             PrintKind::Edge { arrow, .. } => arrow,

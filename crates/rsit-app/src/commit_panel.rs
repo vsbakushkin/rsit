@@ -3,6 +3,7 @@
 
 use std::time::Duration;
 
+use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
@@ -11,7 +12,6 @@ use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, WindowExt as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use gpui_kit::assets::IconName;
 use rsit_git::changes::{Status, StatusEntry};
 use rsit_git::ops::Operation;
 use rsit_git::{ChangeKind, FileChange, Repo, Revision};
@@ -21,7 +21,7 @@ use crate::diff_model::{ChangeAction, DiffItem};
 const CONTEXT: &str = "CommitPanel";
 const ROW_HEIGHT: f32 = 22.0;
 
-actions!(commit, [StageSelected, UnstageSelected, RollbackSelected, ShowSelectedDiff, RefreshChanges]);
+actions!(commit, [StageSelected, UnstageSelected, RollbackSelected, ShowSelectedDiff, RefreshChanges, CommitAndPush]);
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
@@ -30,6 +30,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("ctrl-d", ShowSelectedDiff, Some(CONTEXT)),
         KeyBinding::new("enter", ShowSelectedDiff, Some(CONTEXT)),
         KeyBinding::new("f5", RefreshChanges, Some(CONTEXT)),
+        KeyBinding::new("ctrl-alt-k", CommitAndPush, None),
     ]);
 }
 
@@ -122,7 +123,9 @@ impl CommitPanel {
     }
 
     fn watch(&mut self, cx: &mut Context<Self>) {
-        let Ok((watcher, mut events)) = rsit_log::watch::watch_repo(&self.repo) else { return };
+        let Ok((watcher, mut events)) = rsit_log::watch::watch_repo(&self.repo) else {
+            return;
+        };
         let task = cx.spawn(async move |this, cx| {
             use futures::StreamExt as _;
             while events.next().await.is_some() {
@@ -335,6 +338,11 @@ impl CommitPanel {
     }
 
     pub fn commit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.commit_then(false, window, cx)
+    }
+
+    /// Commits, then optionally pushes the current branch (IntelliJ "Commit and Push").
+    pub fn commit_then(&mut self, push: bool, window: &mut Window, cx: &mut Context<Self>) {
         let message = self.message.read(cx).value().to_string();
         if !self.can_commit(cx) {
             let reason = if message.trim().is_empty() {
@@ -366,6 +374,9 @@ impl CommitPanel {
                         this.message.update(cx, |m, cx| m.set_value("", window, cx));
                         this.amend = false;
                         this.message_before_amend = None;
+                        if push {
+                            crate::git_actions::push_current(&this.repo, false, window, cx);
+                        }
                     }
                     Err(e) => window.push_notification(Notification::error(format!("{e:#}")).autohide(false), cx),
                 }
@@ -394,9 +405,13 @@ impl CommitPanel {
                         (kind, Some(Revision::Index), right, ("Staged", "Local"), Some(ChangeAction::Stage))
                     }
                     Group::Unversioned => (ChangeKind::Added, None, Some(Revision::WorkTree), ("", "Local"), None),
-                    Group::Conflicts => {
-                        (ChangeKind::Modified, head.map(Revision::Commit), Some(Revision::WorkTree), ("HEAD", "Local"), None)
-                    }
+                    Group::Conflicts => (
+                        ChangeKind::Modified,
+                        head.map(Revision::Commit),
+                        Some(Revision::WorkTree),
+                        ("HEAD", "Local"),
+                        None,
+                    ),
                 };
                 // renames only exist in the index; the working tree side uses the new path
                 let old_path = if group == Group::Staged { e.orig_path.clone() } else { None };
@@ -565,6 +580,7 @@ impl CommitPanel {
                 this.with_selection(|this, group, path| this.show_diff(group, &path, cx))
             }))
             .on_action(cx.listener(|this, _: &RefreshChanges, _, cx| this.refresh(cx)))
+            .on_action(cx.listener(|this, _: &CommitAndPush, window, cx| this.commit_then(true, window, cx)))
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
@@ -572,16 +588,21 @@ impl CommitPanel {
             .children(groups)
             .when(empty, |d| d.child(div().p_4().text_color(muted).child("No local changes")))
             .context_menu(move |menu, _, cx| {
-                let Some(this) = view.upgrade() else { return menu };
-                let Some((group, path)) = this.read(cx).selected.clone() else { return menu };
-                let entity = this.downgrade();
-                let item = |label: &str, f: fn(&mut CommitPanel, Group, String, &mut Window, &mut Context<CommitPanel>)| {
-                    let (entity, path) = (entity.clone(), path.clone());
-                    PopupMenuItem::new(label.to_string()).on_click(move |_, window, cx| {
-                        let path = path.clone();
-                        entity.update(cx, |this, cx| f(this, group, path, window, cx)).ok();
-                    })
+                let Some(this) = view.upgrade() else {
+                    return menu;
                 };
+                let Some((group, path)) = this.read(cx).selected.clone() else {
+                    return menu;
+                };
+                let entity = this.downgrade();
+                let item =
+                    |label: &str, f: fn(&mut CommitPanel, Group, String, &mut Window, &mut Context<CommitPanel>)| {
+                        let (entity, path) = (entity.clone(), path.clone());
+                        PopupMenuItem::new(label.to_string()).on_click(move |_, window, cx| {
+                            let path = path.clone();
+                            entity.update(cx, |this, cx| f(this, group, path, window, cx)).ok();
+                        })
+                    };
                 let mut menu = menu;
                 match group {
                     Group::Staged => menu = menu.item(item("Unstage", |t, _, p, w, cx| t.unstage(vec![p], w, cx))),
@@ -596,14 +617,16 @@ impl CommitPanel {
                         menu = menu.separator().item(item("Delete…", |t, g, p, w, cx| t.rollback(g, vec![p], w, cx)))
                     }
                     Group::Staged | Group::Unstaged => {
-                        menu = menu.separator().item(item("Rollback…", |t, g, p, w, cx| t.rollback(g, vec![p], w, cx)))
+                        menu =
+                            menu.separator().item(item("Rollback…", |t, g, p, w, cx| t.rollback(g, vec![p], w, cx)))
                     }
                     Group::Conflicts => {}
                 }
                 let copy = path.clone();
-                menu.separator().item(PopupMenuItem::new("Copy Path").on_click(move |_, _, cx| {
-                    cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))
-                }))
+                menu.separator().item(
+                    PopupMenuItem::new("Copy Path")
+                        .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))),
+                )
             })
     }
 }
@@ -652,22 +675,34 @@ impl Render for CommitPanel {
                     .flex_col()
                     .gap_2()
                     .child(
-                        Checkbox::new("amend").label("Amend").checked(self.amend).on_click(cx.listener(
-                            |this, checked: &bool, window, cx| this.set_amend(*checked, window, cx),
-                        )),
+                        Checkbox::new("amend").label("Amend").checked(self.amend).on_click(
+                            cx.listener(|this, checked: &bool, window, cx| this.set_amend(*checked, window, cx)),
+                        ),
                     )
                     .child(div().id("commit-message").test_support().child(Textarea::new(&self.message).h(px(110.))))
                     .child(
-                        div().flex().gap_2().child(
-                            Button::new("commit")
-                                .primary()
-                                .small()
-                                .label(commit_label)
-                                .tooltip("Ctrl+Enter")
-                                .loading(self.busy)
-                                .disabled(!can_commit)
-                                .on_click(cx.listener(|this, _, window, cx| this.commit(window, cx))),
-                        ),
+                        div()
+                            .flex()
+                            .gap_2()
+                            .child(
+                                Button::new("commit")
+                                    .primary()
+                                    .small()
+                                    .label(commit_label)
+                                    .tooltip("Ctrl+Enter")
+                                    .loading(self.busy)
+                                    .disabled(!can_commit)
+                                    .on_click(cx.listener(|this, _, window, cx| this.commit(window, cx))),
+                            )
+                            .child(
+                                Button::new("commit-and-push")
+                                    .small()
+                                    .outline()
+                                    .label("Commit and Push…")
+                                    .tooltip("Ctrl+Alt+K")
+                                    .disabled(!can_commit)
+                                    .on_click(cx.listener(|this, _, window, cx| this.commit_then(true, window, cx))),
+                            ),
                     ),
             )
     }

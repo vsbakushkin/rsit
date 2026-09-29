@@ -100,7 +100,8 @@ impl Matcher {
     fn matches(&self, id: &ObjectId, commit: &gix::objs::CommitRef<'_>) -> bool {
         if let Some(user) = &self.user {
             let matches_sig = |sig: gix::actor::SignatureRef<'_>| {
-                sig.name.to_string().to_lowercase().contains(user) || sig.email.to_string().to_lowercase().contains(user)
+                sig.name.to_string().to_lowercase().contains(user)
+                    || sig.email.to_string().to_lowercase().contains(user)
             };
             // like IntelliJ's VcsLogUserFilterImpl: the author only
             if !commit.author().map(matches_sig).unwrap_or(false) {

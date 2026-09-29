@@ -24,7 +24,18 @@ const FILTER_DELAY: Duration = Duration::from_millis(350);
 
 actions!(
     log,
-    [SelectPrev, SelectNext, SelectPageUp, SelectPageDown, SelectFirst, SelectLast, CopyHash, FocusFilter, Refresh, ShowDiff]
+    [
+        SelectPrev,
+        SelectNext,
+        SelectPageUp,
+        SelectPageDown,
+        SelectFirst,
+        SelectLast,
+        CopyHash,
+        FocusFilter,
+        Refresh,
+        ShowDiff
+    ]
 );
 
 pub fn init(cx: &mut App) {
@@ -256,7 +267,9 @@ impl LogView {
 
     /// Rebuilds the visible graph for the current data and filter.
     fn apply_filter(&mut self, cx: &mut Context<Self>) {
-        let Some(data) = self.data.clone() else { return };
+        let Some(data) = self.data.clone() else {
+            return;
+        };
         if self.filter.is_empty() {
             self._filter = None;
             self.filtering = false;
@@ -392,7 +405,9 @@ impl LogView {
 
     /// Follows the arrow of a long edge under the given point of `row`'s graph.
     fn jump_by_arrow(&mut self, row: u32, x: f32, y: f32, cx: &mut Context<Self>) -> bool {
-        let Some(graph) = self.graph.as_mut() else { return false };
+        let Some(graph) = self.graph.as_mut() else {
+            return false;
+        };
         let elements = graph.print_row(row);
         let Some(target) = graph_paint::element_at(&elements, x, y).and_then(graph_paint::arrow_target) else {
             return false;
@@ -441,7 +456,9 @@ impl LogView {
     // ---- rendering ----
 
     fn render_rows(&mut self, range: Range<usize>, _window: &mut Window, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let Some(graph) = self.graph.as_mut() else { return Vec::new() };
+        let Some(graph) = self.graph.as_mut() else {
+            return Vec::new();
+        };
         let data = graph.data.clone();
         let theme = cx.theme();
         let (list_active, background, muted, hover) =
@@ -494,15 +511,20 @@ impl LogView {
                             .test_support()
                             .flex_none()
                             .child(
-                                canvas(|_, _, _| (), move |bounds, _, window, _| {
-                                    painted.set(Some(bounds));
-                                    graph_paint::paint_row(bounds, row_graph, window)
-                                })
+                                canvas(
+                                    |_, _, _| (),
+                                    move |bounds, _, window, _| {
+                                        painted.set(Some(bounds));
+                                        graph_paint::paint_row(bounds, row_graph, window)
+                                    },
+                                )
                                 .w(px(graph_width))
                                 .h(px(ROW_HEIGHT)),
                             )
                             .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
-                                let Some(bounds) = painted_for_click.get() else { return };
+                                let Some(bounds) = painted_for_click.get() else {
+                                    return;
+                                };
                                 let local = event.position() - bounds.origin;
                                 if this.jump_by_arrow(row, f32::from(local.x), f32::from(local.y), cx) {
                                     window.focus(&this.focus, cx);
@@ -529,8 +551,26 @@ impl LogView {
                                     .children(data.refs_at(permanent).iter().take(4).map(ref_label)),
                             ),
                     )
-                    .child(div().w(px(160.)).flex_shrink(1.).min_w(px(40.)).px_2().truncate().text_color(muted).child(author))
-                    .child(div().w(px(130.)).flex_shrink(1.).min_w(px(40.)).px_2().truncate().text_color(muted).child(date))
+                    .child(
+                        div()
+                            .w(px(160.))
+                            .flex_shrink(1.)
+                            .min_w(px(40.))
+                            .px_2()
+                            .truncate()
+                            .text_color(muted)
+                            .child(author),
+                    )
+                    .child(
+                        div()
+                            .w(px(130.))
+                            .flex_shrink(1.)
+                            .min_w(px(40.))
+                            .px_2()
+                            .truncate()
+                            .text_color(muted)
+                            .child(date),
+                    )
                     .child(
                         div()
                             .w(px(90.))
@@ -647,17 +687,13 @@ impl LogView {
             .border_color(border)
             .child(div().w(px(280.)).child(Input::new(&self.text_input).cleanable(true)))
             .child(
-                Button::new("regex")
-                    .small()
-                    .ghost()
-                    .label(".*")
-                    .toggled(self.filter.regex)
-                    .tooltip("Regex")
-                    .on_click(cx.listener(|this, _, _, cx| {
+                Button::new("regex").small().ghost().label(".*").toggled(self.filter.regex).tooltip("Regex").on_click(
+                    cx.listener(|this, _, _, cx| {
                         let mut filter = this.filter.clone();
                         filter.regex = !filter.regex;
                         this.set_filter(filter, cx);
-                    })),
+                    }),
+                ),
             )
             .child(
                 Button::new("match-case")
@@ -701,12 +737,20 @@ impl LogView {
                 }
                 refs.sort_by(|a, b| data.refs.label_cmp(a, b));
                 entries.push(
-                    div().px_2().pt_2().pb_1().text_xs().text_color(theme.muted_foreground).child(title).into_any_element(),
+                    div()
+                        .px_2()
+                        .pt_2()
+                        .pb_1()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(title)
+                        .into_any_element(),
                 );
                 for r in refs {
                     let target = r.target;
                     let name = r.name.clone();
-                    let current = kind == RefKind::LocalBranch && data.refs.current_branch.as_deref() == Some(r.name.as_str());
+                    let current =
+                        kind == RefKind::LocalBranch && data.refs.current_branch.as_deref() == Some(r.name.as_str());
                     let visible = graph.row_of(&target).is_some();
                     let filtered_on = self.filter.branches.contains(&r.name);
                     entries.push(
@@ -777,8 +821,10 @@ impl LogView {
         let containing = self.containing.clone();
         let details = meta.map(|(meta, data)| {
             let parents = meta.parents.clone();
-            let refs: Vec<String> =
-                data.row_of(&meta.id).map(|row| data.refs_at(row).iter().map(|r| r.name.clone()).collect()).unwrap_or_default();
+            let refs: Vec<String> = data
+                .row_of(&meta.id)
+                .map(|row| data.refs_at(row).iter().map(|r| r.name.clone()).collect())
+                .unwrap_or_default();
             div()
                 .p_2()
                 .flex()
@@ -792,11 +838,20 @@ impl LogView {
                         .flex_col()
                         .child(format!("{} <{}>", meta.author.name, meta.author.email))
                         .child(format!("authored {}", format_time_full(meta.author.time)))
-                        .when(meta.committer.email != meta.author.email || meta.committer.time != meta.author.time, |d| {
-                            d.child(format!("committed by {} {}", meta.committer.name, format_time_full(meta.committer.time)))
-                        }),
+                        .when(
+                            meta.committer.email != meta.author.email || meta.committer.time != meta.author.time,
+                            |d| {
+                                d.child(format!(
+                                    "committed by {} {}",
+                                    meta.committer.name,
+                                    format_time_full(meta.committer.time)
+                                ))
+                            },
+                        ),
                 )
-                .child(div().font_family(cx.theme().mono_font_family.clone()).text_color(muted).child(meta.id.to_string()))
+                .child(
+                    div().font_family(cx.theme().mono_font_family.clone()).text_color(muted).child(meta.id.to_string()),
+                )
                 .when(!parents.is_empty(), |d| {
                     d.child(div().flex().flex_wrap().gap_1().text_color(muted).child("parents:").children(
                         parents.into_iter().map(|p| {
@@ -810,13 +865,20 @@ impl LogView {
                         }),
                     ))
                 })
-                .when(!refs.is_empty(), |d| d.child(div().text_color(muted).child(format!("refs: {}", refs.join(", ")))))
+                .when(!refs.is_empty(), |d| {
+                    d.child(div().text_color(muted).child(format!("refs: {}", refs.join(", "))))
+                })
                 .child(div().text_color(muted).whitespace_normal().child(match &containing {
                     None => "In branches: computing…".to_string(),
                     Some(b) if b.is_empty() => "In no branches".to_string(),
                     Some(b) => {
                         const SHOWN: usize = 12;
-                        let mut text = format!("In {} branch{}: {}", b.len(), if b.len() == 1 { "" } else { "es" }, b[..b.len().min(SHOWN)].join(", "));
+                        let mut text = format!(
+                            "In {} branch{}: {}",
+                            b.len(),
+                            if b.len() == 1 { "" } else { "es" },
+                            b[..b.len().min(SHOWN)].join(", ")
+                        );
                         if b.len() > SHOWN {
                             text.push_str(&format!(" and {} more", b.len() - SHOWN));
                         }
@@ -825,11 +887,9 @@ impl LogView {
                 }))
         });
         v_resizable("details")
-            .child(
-                resizable_panel().child(
-                    div().id("changes").size_full().overflow_y_scroll().border_b_1().border_color(border).children(files),
-                ),
-            )
+            .child(resizable_panel().child(
+                div().id("changes").size_full().overflow_y_scroll().border_b_1().border_color(border).children(files),
+            ))
             .child(
                 resizable_panel()
                     .size(px(260.))
@@ -903,7 +963,9 @@ pub fn change_style(kind: rsit_git::ChangeKind) -> (char, Hsla) {
 
 fn format_time(secs: i64) -> String {
     use chrono::{Local, TimeZone};
-    let Some(t) = Local.timestamp_opt(secs, 0).single() else { return String::new() };
+    let Some(t) = Local.timestamp_opt(secs, 0).single() else {
+        return String::new();
+    };
     let today = Local::now().date_naive();
     let date = t.date_naive();
     if date == today {

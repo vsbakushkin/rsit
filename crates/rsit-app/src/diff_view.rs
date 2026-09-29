@@ -81,9 +81,8 @@ pub fn open_items(repo: Repo, title: String, items: Vec<DiffItem>, selected: usi
         app_id: Some("rsit".into()),
         ..Default::default()
     };
-    let result = gpui_kit::open_window(options, cx, |window, cx| {
-        cx.new(|cx| DiffView::new(repo, items, selected, window, cx))
-    });
+    let result =
+        gpui_kit::open_window(options, cx, |window, cx| cx.new(|cx| DiffView::new(repo, items, selected, window, cx)));
     if let Err(e) = result {
         eprintln!("rsit: cannot open diff window: {e:#}");
     }
@@ -133,7 +132,9 @@ impl DiffView {
     }
 
     fn load(&mut self, keep_position: bool, cx: &mut Context<Self>) {
-        let Some(item) = self.files.get(self.selected).cloned() else { return };
+        let Some(item) = self.files.get(self.selected).cloned() else {
+            return;
+        };
         if !keep_position {
             self.diff = None;
             self.expanded.clear();
@@ -179,10 +180,13 @@ impl DiffView {
 
     /// Stages or unstages one change (IntelliJ "Stage/Unstage Selected Changes").
     fn apply_action(&mut self, fragment: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let (Some(action), Some(diff), Some(item)) = (self.action(), self.diff.clone(), self.files.get(self.selected)) else {
+        let (Some(action), Some(diff), Some(item)) = (self.action(), self.diff.clone(), self.files.get(self.selected))
+        else {
             return;
         };
-        let Some(f) = diff.fragments.get(fragment) else { return };
+        let Some(f) = diff.fragments.get(fragment) else {
+            return;
+        };
         let patch = rsit_diff::fragment_patch(&item.change.path, &diff.left.text, &diff.right.text, f);
         let cwd = self.repo.cwd().to_path_buf();
         self.current_change = Some(fragment);
@@ -300,7 +304,9 @@ impl DiffView {
     // ---- rendering ----
 
     fn render_rows(&mut self, range: Range<usize>, _: &mut Window, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let Some(diff) = self.diff.clone() else { return Vec::new() };
+        let Some(diff) = self.diff.clone() else {
+            return Vec::new();
+        };
         let colors = DiffColors::new(cx);
         let words = self.settings.words;
         let current = self.current_change;
@@ -356,8 +362,7 @@ impl DiffView {
                             (Some(_), _) => Some(div().w(px(14.)).flex_none().into_any_element()),
                             _ => None,
                         };
-                        let row_el =
-                            div().id(("line", ix)).h(px(ROW_HEIGHT)).w_full().flex().font_family(mono.clone());
+                        let row_el = div().id(("line", ix)).h(px(ROW_HEIGHT)).w_full().flex().font_family(mono.clone());
                         match self.settings.layout {
                             Layout::SideBySide => row_el
                                 .children(marker)
@@ -463,8 +468,8 @@ impl DiffView {
                         )
                     })),
             )
-            .child(
-                Button::new("whitespace").small().outline().label(policy_label).on_click(cx.listener(|this, _, _, cx| {
+            .child(Button::new("whitespace").small().outline().label(policy_label).on_click(cx.listener(
+                |this, _, _, cx| {
                     this.update_settings(
                         |s| {
                             s.policy = match s.policy {
@@ -475,8 +480,8 @@ impl DiffView {
                         },
                         cx,
                     )
-                })),
-            )
+                },
+            )))
             .child(
                 Button::new("collapse")
                     .small()
@@ -535,7 +540,9 @@ impl DiffView {
         if let Some(error) = &self.error {
             return message(error.clone());
         }
-        let Some(diff) = &self.diff else { return message("Loading…".into()) };
+        let Some(diff) = &self.diff else {
+            return message("Loading…".into());
+        };
         let labels = self
             .files
             .get(self.selected)
@@ -770,9 +777,7 @@ fn cell(
 /// Widest line in display columns (tabs expanded to the next stop).
 fn max_columns(text: &str) -> usize {
     text.lines()
-        .map(|line| {
-            line.chars().fold(0, |col, c| if c == '\t' { col + TAB_WIDTH - col % TAB_WIDTH } else { col + 1 })
-        })
+        .map(|line| line.chars().fold(0, |col, c| if c == '\t' { col + TAB_WIDTH - col % TAB_WIDTH } else { col + 1 }))
         .max()
         .unwrap_or(0)
 }

@@ -3,8 +3,8 @@
 
 pub mod changes;
 pub mod cli;
-pub mod ops;
 mod graph;
+pub mod ops;
 mod refs;
 
 use std::path::{Path, PathBuf};
@@ -94,12 +94,7 @@ impl CommitMeta {
 
 fn signature(sig: gix::actor::SignatureRef<'_>) -> Signature {
     let time = sig.time().unwrap_or_default();
-    Signature {
-        name: sig.name.to_string(),
-        email: sig.email.to_string(),
-        time: time.seconds,
-        offset: time.offset,
-    }
+    Signature { name: sig.name.to_string(), email: sig.email.to_string(), time: time.seconds, offset: time.offset }
 }
 
 /// Reads commit metadata. Uses the thread-local repository `repo` so callers can
@@ -182,7 +177,9 @@ pub fn changed_files(repo: &gix::Repository, commit: ObjectId) -> Result<Vec<Fil
 /// Contents of `path` in `commit`, `None` if the file does not exist there.
 pub fn file_at(repo: &gix::Repository, commit: ObjectId, path: &str) -> Result<Option<Vec<u8>>> {
     let tree = repo.find_commit(commit)?.tree()?;
-    let Some(entry) = tree.lookup_entry_by_path(path)? else { return Ok(None) };
+    let Some(entry) = tree.lookup_entry_by_path(path)? else {
+        return Ok(None);
+    };
     if !entry.mode().is_blob_or_symlink() {
         return Ok(None);
     }
@@ -211,14 +208,18 @@ pub fn file_at_revision(repo: &Repo, rev: Revision, path: &str) -> Result<Option
         Revision::Commit(id) => file_at(&local, id, path),
         Revision::Index => {
             let index = local.index_or_empty()?;
-            let Some(entry) = index.entry_by_path(path.into()) else { return Ok(None) };
+            let Some(entry) = index.entry_by_path(path.into()) else {
+                return Ok(None);
+            };
             if entry.stage() != gix::index::entry::Stage::Unconflicted {
                 return Ok(None);
             }
             Ok(Some(local.find_object(entry.id)?.detach().data))
         }
         Revision::WorkTree => {
-            let Some(workdir) = repo.workdir() else { return Ok(None) };
+            let Some(workdir) = repo.workdir() else {
+                return Ok(None);
+            };
             let full = workdir.join(path);
             match std::fs::symlink_metadata(&full) {
                 Ok(meta) if meta.file_type().is_symlink() => {

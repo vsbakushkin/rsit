@@ -116,15 +116,19 @@ impl Workspace {
             .border_b_1()
             .border_color(border)
             .child(branches)
-            .child(action("fetch", IconName::RefreshCw, "Fetch").on_click(cx.listener(|this, _, window, cx| {
-                git_actions::fetch(&this.repo, window, cx)
-            })))
-            .child(action("update", IconName::ArrowDownToLine, "Update Project (Ctrl+T)").on_click(cx.listener(
-                |this, _, window, cx| git_actions::update(&this.repo, window, cx),
-            )))
-            .child(action("push", IconName::ArrowUpFromLine, "Push (Ctrl+Shift+K)").on_click(cx.listener(
-                |this, _, window, cx| git_actions::push_current(&this.repo, false, window, cx),
-            )))
+            .child(
+                action("fetch", IconName::RefreshCw, "Fetch")
+                    .on_click(cx.listener(|this, _, window, cx| git_actions::fetch(&this.repo, window, cx))),
+            )
+            .child(
+                action("update", IconName::ArrowDownToLine, "Update Project (Ctrl+T)")
+                    .on_click(cx.listener(|this, _, window, cx| git_actions::update(&this.repo, window, cx))),
+            )
+            .child(
+                action("push", IconName::ArrowUpFromLine, "Push (Ctrl+Shift+K)").on_click(
+                    cx.listener(|this, _, window, cx| git_actions::push_current(&this.repo, false, window, cx)),
+                ),
+            )
             .child(div().flex_1())
             .children(activity.map(|a| div().text_color(muted).text_sm().truncate().child(a)))
     }
@@ -148,9 +152,8 @@ fn branches_popup(
         .scrollable(true)
         .item({
             let repo = repo.clone();
-            PopupMenuItem::new("New Branch…").on_click(move |_, window, cx| {
-                git_actions::new_branch_from(&repo, "HEAD".into(), window, cx)
-            })
+            PopupMenuItem::new("New Branch…")
+                .on_click(move |_, window, cx| git_actions::new_branch_from(&repo, "HEAD".into(), window, cx))
         })
         .item(action("Update Project", git_actions::update))
         .item(action("Fetch", git_actions::fetch))
@@ -194,7 +197,9 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &Fetch, window, cx| git_actions::fetch(&this.repo, window, cx)))
             .on_action(cx.listener(|this, _: &Update, window, cx| git_actions::update(&this.repo, window, cx)))
-            .on_action(cx.listener(|this, _: &Push, window, cx| git_actions::push_current(&this.repo, false, window, cx)))
+            .on_action(
+                cx.listener(|this, _: &Push, window, cx| git_actions::push_current(&this.repo, false, window, cx)),
+            )
             .child(self.render_toolbar(cx))
             .child(
                 div().flex_1().min_h_0().child(

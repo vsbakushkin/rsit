@@ -129,7 +129,9 @@ pub fn read_refs(repo: &gix::Repository) -> Result<Refs> {
     let mut out = Refs::default();
     let platform = repo.references()?;
     for reference in platform.all()? {
-        let Ok(mut reference) = reference else { continue };
+        let Ok(mut reference) = reference else {
+            continue;
+        };
         let full_name = reference.name().as_bstr().to_string();
         let (kind, name) = if let Some(n) = full_name.strip_prefix("refs/heads/") {
             (RefKind::LocalBranch, n.to_string())
@@ -144,7 +146,9 @@ pub fn read_refs(repo: &gix::Repository) -> Result<Refs> {
             // stash, notes, bisect, ... are not shown in the log
             continue;
         };
-        let Ok(id) = reference.peel_to_id() else { continue };
+        let Ok(id) = reference.peel_to_id() else {
+            continue;
+        };
         let target = id.detach();
         // lightweight tags on trees/blobs have no commit
         if kind == RefKind::Tag && !is_commit(repo, target) {

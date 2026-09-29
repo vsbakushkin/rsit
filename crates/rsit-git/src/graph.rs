@@ -36,10 +36,7 @@ impl CommitGraphData {
 
     /// Row of the commit `id`, if it is loaded.
     pub fn row_of(&self, id: &gix::oid) -> Option<u32> {
-        self.by_id
-            .binary_search_by(|&i| self.ids[i as usize].as_ref().cmp(id))
-            .ok()
-            .map(|pos| self.by_id[pos])
+        self.by_id.binary_search_by(|&i| self.ids[i as usize].as_ref().cmp(id)).ok().map(|pos| self.by_id[pos])
     }
 
     pub fn contains(&self, id: &gix::oid) -> bool {
@@ -111,8 +108,7 @@ pub fn load_commit_graph(
     let mut new_ids: Vec<ObjectId> = Vec::new();
     let mut new_times: Vec<i64> = Vec::new();
     let mut new_parents: Vec<Vec<ObjectId>> = Vec::new();
-    let tips_to_walk: Vec<ObjectId> =
-        tips.iter().copied().filter(|t| cache.is_none_or(|c| !c.contains(t))).collect();
+    let tips_to_walk: Vec<ObjectId> = tips.iter().copied().filter(|t| cache.is_none_or(|c| !c.contains(t))).collect();
     if !tips_to_walk.is_empty() {
         let walk = repo
             .rev_walk(tips_to_walk)
@@ -156,11 +152,7 @@ pub fn load_commit_graph(
     let k = new_ids.len() as u32;
     let new_pos: HashMap<ObjectId, u32> = new_ids.iter().enumerate().map(|(i, id)| (*id, i as u32)).collect();
     let lookup = |id: &ObjectId| -> u32 {
-        new_pos
-            .get(id)
-            .copied()
-            .or_else(|| cache.and_then(|c| c.row_of(id)).map(|i| i + k))
-            .unwrap_or(MISSING)
+        new_pos.get(id).copied().or_else(|| cache.and_then(|c| c.row_of(id)).map(|i| i + k)).unwrap_or(MISSING)
     };
     let cached_len = cache.map_or(0, |c| c.len());
     let n = k as usize + cached_len;
@@ -259,7 +251,11 @@ fn date_order(all: &Unsorted, keep: Option<&[bool]>) -> CommitGraphData {
     for &old in &order {
         ids.push(all.ids[old as usize]);
         times.push(all.times[old as usize]);
-        list.extend(all.parents(old as usize).iter().map(|&p| if p == MISSING { MISSING } else { new_index[p as usize] }));
+        list.extend(all.parents(old as usize).iter().map(
+            |&p| {
+                if p == MISSING { MISSING } else { new_index[p as usize] }
+            },
+        ));
         offsets.push(list.len() as u32);
     }
     CommitGraphData::from_parts(ids, times, offsets, list)

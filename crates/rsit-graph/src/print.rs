@@ -27,9 +27,15 @@ pub enum EdgeDir {
 pub enum PrintKind {
     Node,
     /// Half of an edge between this row and the row above/below.
-    Edge { other_pos: u32, dir: EdgeDir, arrow: bool },
+    Edge {
+        other_pos: u32,
+        dir: EdgeDir,
+        arrow: bool,
+    },
     /// Arrow stub of a special edge that has no end in the neighbour row.
-    Terminal { dir: EdgeDir },
+    Terminal {
+        dir: EdgeDir,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -119,7 +125,13 @@ impl PrintElementGenerator {
                 map.get(&GraphElement::Node(node)).copied()
             })
         };
-        let push_edge = |result: &mut Vec<PrintElement>, pos: u32, edge: GraphEdge, other_pos: Option<u32>, dir, arrow: Option<EdgeDir>, terminal: bool| {
+        let push_edge = |result: &mut Vec<PrintElement>,
+                         pos: u32,
+                         edge: GraphEdge,
+                         other_pos: Option<u32>,
+                         dir,
+                         arrow: Option<EdgeDir>,
+                         terminal: bool| {
             let element = GraphElement::Edge(edge);
             let color_id = colors.color_id(&element);
             if let Some(other_pos) = other_pos {
@@ -330,11 +342,7 @@ pub fn compare_elements(o1: &GraphElement, o2: &GraphElement, li: &impl Fn(u32) 
             (_, None) => compare_edge_node(e1, e2.not_null_node(), li),
             (Some((up1, down1)), Some((up2, down2))) => {
                 if up1 == up2 {
-                    if down1 < down2 {
-                        -compare_edge_node(e2, down1, li)
-                    } else {
-                        compare_edge_node(e1, down2, li)
-                    }
+                    if down1 < down2 { -compare_edge_node(e2, down1, li) } else { compare_edge_node(e1, down2, li) }
                 } else if up1 < up2 {
                     compare_edge_node(e1, up2, li)
                 } else {

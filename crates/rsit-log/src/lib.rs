@@ -7,7 +7,10 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use rsit_git::{CommitGraphData, CommitMeta, ObjectId, Ref, RefKind, Refs, Repo};
-use rsit_graph::{GraphCommit, GraphElement, PermanentGraph, PrintElement, PrintElementGenerator};
+use rsit_graph::{FilteredGraph, GraphCommit, GraphElement, PermanentGraph, PrintElement, PrintElementGenerator};
+
+pub mod filter;
+pub use filter::LogFilter;
 
 /// Commits to load for the first screen before the full history is read.
 pub const FIRST_SCREEN_COMMITS: usize = 1000;
@@ -133,17 +136,55 @@ impl LogData {
     }
 }
 
-/// Per-view graph drawing state: caches of the print element generator.
-pub struct GraphPrinter {
+/// What the table shows: the whole graph or a filtered part of it, plus the
+/// per-view caches of the print element generator. Rows are visible rows.
+pub struct VisibleGraph {
+    pub data: Arc<LogData>,
+    filtered: Option<FilteredGraph>,
     generator: PrintElementGenerator,
     width: u32,
 }
 
-impl GraphPrinter {
-    pub fn new(data: &LogData) -> Self {
+impl VisibleGraph {
+    pub fn new(data: Arc<LogData>, filtered: Option<FilteredGraph>) -> Self {
         let generator = PrintElementGenerator::new(false);
-        let width = generator.recommended_width(&data.graph.linear);
-        Self { generator, width }
+        let width = match &filtered {
+            None => generator.recommended_width(&data.graph.linear),
+            Some(f) => generator.recommended_width(&f.view(&data.graph.linear)),
+        };
+        Self { data, filtered, generator, width }
+    }
+
+    pub fn is_filtered(&self) -> bool {
+        self.filtered.is_some()
+    }
+
+    pub fn len(&self) -> usize {
+        self.filtered.as_ref().map_or(self.data.len(), |f| f.len())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Row in the full graph (index into `data.commits`).
+    pub fn permanent_row(&self, row: u32) -> u32 {
+        self.filtered.as_ref().map_or(row, |f| f.to_delegate(row))
+    }
+
+    pub fn visible_row(&self, permanent_row: u32) -> Option<u32> {
+        match &self.filtered {
+            None => Some(permanent_row),
+            Some(f) => f.from_delegate(permanent_row),
+        }
+    }
+
+    pub fn id(&self, row: u32) -> ObjectId {
+        self.data.id(self.permanent_row(row))
+    }
+
+    pub fn row_of(&self, id: &ObjectId) -> Option<u32> {
+        self.visible_row(self.data.row_of(id)?)
     }
 
     /// Lanes that fit most rows (IntelliJ's recommended graph width).
@@ -151,10 +192,31 @@ impl GraphPrinter {
         self.width
     }
 
-    pub fn row(&mut self, data: &LogData, row: u32) -> Vec<PrintElement> {
-        let li = |n: u32| data.graph.layout.layout_index(n);
-        let colors = |e: &GraphElement| data.color_id(e);
-        self.generator.print_elements(&data.graph.linear, &li, &colors, row)
+    pub fn print_row(&mut self, row: u32) -> Vec<PrintElement> {
+        let data = &self.data;
+        match &self.filtered {
+            None => {
+                let li = |n: u32| data.graph.layout.layout_index(n);
+                let colors = |e: &GraphElement| data.color_id(e);
+                self.generator.print_elements(&data.graph.linear, &li, &colors, row)
+            }
+            Some(f) => {
+                let li = |n: u32| data.graph.layout.layout_index(f.to_delegate(n));
+                let colors = |e: &GraphElement| data.color_id(&to_permanent(f, e));
+                self.generator.print_elements(&f.view(&data.graph.linear), &li, &colors, row)
+            }
+        }
+    }
+}
+
+fn to_permanent(f: &FilteredGraph, e: &GraphElement) -> GraphElement {
+    match *e {
+        GraphElement::Node(n) => GraphElement::Node(f.to_delegate(n)),
+        GraphElement::Edge(edge) => GraphElement::Edge(rsit_graph::GraphEdge {
+            up: edge.up.map(|n| f.to_delegate(n)),
+            down: edge.down.map(|n| f.to_delegate(n)),
+            ..edge
+        }),
     }
 }
 

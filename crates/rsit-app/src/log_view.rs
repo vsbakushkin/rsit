@@ -3,18 +3,21 @@
 
 use std::ops::Range;
 use std::sync::Arc;
+use std::time::Duration;
 
+use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::resizable::{h_resizable, resizable_panel, v_resizable};
-use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::{ActiveTheme as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use rsit_git::{FileChange, Ref, RefKind, Repo};
-use rsit_log::{GraphPrinter, LogData, MetaCache};
+use rsit_git::{FileChange, ObjectId, Ref, RefKind, Repo};
+use rsit_log::{LogData, LogFilter, MetaCache, VisibleGraph};
 
 use crate::graph_paint::{self, ROW_HEIGHT, RowGraph};
 
 const CONTEXT: &str = "LogTable";
+const FILTER_DELAY: Duration = Duration::from_millis(350);
 
 actions!(
     log,
@@ -38,42 +41,72 @@ pub fn init(cx: &mut App) {
 
 pub struct LogView {
     repo: Repo,
+    /// Latest loaded history.
     data: Option<Arc<LogData>>,
-    printer: Option<GraphPrinter>,
+    /// What the table shows (the history, possibly filtered).
+    graph: Option<VisibleGraph>,
+    filter: LogFilter,
     meta: MetaCache,
     selected: Option<u32>,
     changes: Vec<FileChange>,
     scroll: UniformListScrollHandle,
     focus: FocusHandle,
-    filter: Entity<InputState>,
+    text_input: Entity<InputState>,
+    user_input: Entity<InputState>,
+    paths_input: Entity<InputState>,
     status: SharedString,
+    loading: bool,
+    filtering: bool,
     _load: Option<Task<()>>,
+    _filter: Option<Task<()>>,
+    _filter_delay: Option<Task<()>>,
     _changes: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
 
 impl LogView {
-    pub fn new(repo: Repo, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let filter = cx.new(|cx| InputState::new(window, cx).placeholder("Text or hash"));
-        let subscriptions = vec![cx.subscribe_in(&filter, window, |this, _, event: &InputEvent, window, cx| {
-            if let InputEvent::PressEnter { .. } = event {
-                this.find_next(window, cx);
-            }
-        })];
+    pub fn new(repo: Repo, filter: LogFilter, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let input = |placeholder: &'static str, value: String, window: &mut Window, cx: &mut Context<Self>| {
+            cx.new(|cx| {
+                let mut state = InputState::new(window, cx).placeholder(placeholder);
+                state.set_value(value, window, cx);
+                state
+            })
+        };
+        let text_input = input("Text or hash", filter.text.clone(), window, cx);
+        let user_input = input("User", filter.user.clone(), window, cx);
+        let paths_input = input("Paths", filter.paths.join(", "), window, cx);
+        let subscriptions = [&text_input, &user_input, &paths_input]
+            .into_iter()
+            .map(|input| {
+                cx.subscribe_in(input, window, |this, _, event: &InputEvent, _, cx| match event {
+                    InputEvent::Change => this.schedule_filter(cx),
+                    InputEvent::PressEnter { .. } => this.update_filter_from_inputs(cx),
+                    _ => {}
+                })
+            })
+            .collect();
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         let mut this = Self {
             meta: MetaCache::new(&repo),
             repo,
             data: None,
-            printer: None,
+            graph: None,
+            filter,
             selected: None,
             changes: Vec::new(),
             scroll: UniformListScrollHandle::new(),
             focus,
-            filter,
-            status: "Loading…".into(),
+            text_input,
+            user_input,
+            paths_input,
+            status: SharedString::default(),
+            loading: true,
+            filtering: false,
             _load: None,
+            _filter: None,
+            _filter_delay: None,
             _changes: None,
             _subscriptions: subscriptions,
         };
@@ -81,9 +114,12 @@ impl LogView {
         this
     }
 
+    // ---- loading ----
+
     /// Loads the first screen quickly, then the whole history.
     fn reload(&mut self, cx: &mut Context<Self>) {
         let repo = self.repo.clone();
+        self.loading = true;
         self._load = Some(cx.spawn(async move |this, cx| {
             let started = std::time::Instant::now();
             let first = {
@@ -97,42 +133,139 @@ impl LogView {
             let full = cx.background_spawn(async move { LogData::load(repo, None) }).await;
             this.update(cx, |this, cx| this.set_data(full, started, cx)).ok();
         }));
+        cx.notify();
     }
 
     fn set_data(&mut self, data: anyhow::Result<LogData>, started: std::time::Instant, cx: &mut Context<Self>) {
         let data = match data {
             Ok(data) => data,
             Err(e) => {
+                self.loading = false;
                 self.status = format!("Error: {e:#}").into();
                 cx.notify();
                 return;
             }
         };
-        // keep the selected commit selected across reloads
-        let selected_id = self.selected.and_then(|row| self.data.as_ref().map(|d| d.id(row)));
-        self.printer = Some(GraphPrinter::new(&data));
+        self.loading = data.partial;
         self.status = if data.partial {
             format!("{}+ commits, loading…", data.len())
         } else {
             format!("{} commits · {} refs · {:.0?}", data.len(), data.refs.refs.len(), started.elapsed())
         }
         .into();
-        let data = Arc::new(data);
-        let row = selected_id.and_then(|id| data.row_of(&id)).or_else(|| (!data.is_empty()).then_some(0));
-        self.data = Some(data);
+        self.data = Some(Arc::new(data));
+        self.apply_filter(cx);
+    }
+
+    // ---- filtering ----
+
+    fn schedule_filter(&mut self, cx: &mut Context<Self>) {
+        self._filter_delay = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(FILTER_DELAY).await;
+            this.update(cx, |this, cx| this.update_filter_from_inputs(cx)).ok();
+        }));
+    }
+
+    fn update_filter_from_inputs(&mut self, cx: &mut Context<Self>) {
+        self._filter_delay = None;
+        let mut filter = self.filter.clone();
+        filter.text = self.text_input.read(cx).value().trim().to_string();
+        filter.user = self.user_input.read(cx).value().trim().to_string();
+        filter.paths = self
+            .paths_input
+            .read(cx)
+            .value()
+            .split([',', ' '])
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .map(String::from)
+            .collect();
+        self.set_filter(filter, cx);
+    }
+
+    fn set_filter(&mut self, filter: LogFilter, cx: &mut Context<Self>) {
+        if filter == self.filter {
+            return;
+        }
+        self.filter = filter;
+        self.apply_filter(cx);
+    }
+
+    /// Rebuilds the visible graph for the current data and filter.
+    fn apply_filter(&mut self, cx: &mut Context<Self>) {
+        let Some(data) = self.data.clone() else { return };
+        if self.filter.is_empty() {
+            self._filter = None;
+            self.filtering = false;
+            self.set_graph(VisibleGraph::new(data, None), cx);
+            return;
+        }
+        self.filtering = true;
+        let filter = self.filter.clone();
+        self._filter = Some(cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    let filtered = rsit_log::filter::filtered_graph(&data, &filter)?;
+                    anyhow::Ok(VisibleGraph::new(data, filtered))
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.filtering = false;
+                match result {
+                    Ok(graph) => this.set_graph(graph, cx),
+                    Err(e) => {
+                        this.status = format!("Filter failed: {e:#}").into();
+                        cx.notify();
+                    }
+                }
+            })
+            .ok();
+        }));
+        cx.notify();
+    }
+
+    fn set_graph(&mut self, graph: VisibleGraph, cx: &mut Context<Self>) {
+        // keep the selected commit selected if it is still visible
+        let selected_id = self.selected_id();
+        let row = selected_id.and_then(|id| graph.row_of(&id)).or_else(|| (!graph.is_empty()).then_some(0));
+        self.graph = Some(graph);
         self.selected = None;
-        if let Some(row) = row {
-            self.select(row, cx);
+        match row {
+            Some(row) => self.select(row, cx),
+            None => self.changes.clear(),
         }
         cx.notify();
     }
 
+    fn toggle_branch_filter(&mut self, name: String, cx: &mut Context<Self>) {
+        let mut filter = self.filter.clone();
+        if filter.branches == [name.clone()] {
+            filter.branches.clear();
+        } else {
+            filter.branches = vec![name];
+        }
+        self.set_filter(filter, cx);
+    }
+
+    fn clear_filters(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        for input in [&self.text_input, &self.user_input, &self.paths_input] {
+            input.update(cx, |input, cx| input.set_value("", window, cx));
+        }
+        self.set_filter(LogFilter::default(), cx);
+    }
+
+    // ---- selection ----
+
+    fn selected_id(&self) -> Option<ObjectId> {
+        Some(self.graph.as_ref()?.id(self.selected?))
+    }
+
     fn select(&mut self, row: u32, cx: &mut Context<Self>) {
-        let Some(data) = self.data.clone() else { return };
-        if data.is_empty() {
+        let Some(graph) = &self.graph else { return };
+        if graph.is_empty() {
             return;
         }
-        let row = row.min(data.len() as u32 - 1);
+        let row = row.min(graph.len() as u32 - 1);
         self.scroll.scroll_to_item(row as usize, ScrollStrategy::Nearest);
         if self.selected == Some(row) {
             return;
@@ -140,11 +273,11 @@ impl LogView {
         self.selected = Some(row);
         self.changes.clear();
         let repo = self.repo.clone();
-        let id = data.id(row);
+        let id = graph.id(row);
         self._changes = Some(cx.spawn(async move |this, cx| {
             let changes = cx.background_spawn(async move { rsit_git::changed_files(&repo.local(), id) }).await;
             this.update(cx, |this, cx| {
-                if this.selected.map(|r| data.id(r)) == Some(id) {
+                if this.selected_id() == Some(id) {
                     this.changes = changes.unwrap_or_default();
                     cx.notify();
                 }
@@ -154,9 +287,29 @@ impl LogView {
         cx.notify();
     }
 
+    /// Selects `id`, dropping filters that hide it.
+    fn navigate_to(&mut self, id: ObjectId, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(graph) = &self.graph else { return };
+        match graph.row_of(&id) {
+            Some(row) => {
+                self.scroll.scroll_to_item(row as usize, ScrollStrategy::Center);
+                self.select(row, cx);
+            }
+            None if graph.data.row_of(&id).is_some() => {
+                // hidden by the filter: show everything, then select it
+                self.clear_filters(window, cx);
+                if let Some(row) = self.graph.as_ref().and_then(|g| g.row_of(&id)) {
+                    self.scroll.scroll_to_item(row as usize, ScrollStrategy::Center);
+                    self.select(row, cx);
+                }
+            }
+            None => {}
+        }
+    }
+
     fn move_selection(&mut self, delta: i64, cx: &mut Context<Self>) {
-        let Some(data) = &self.data else { return };
-        let last = data.len() as i64 - 1;
+        let Some(graph) = &self.graph else { return };
+        let last = graph.len() as i64 - 1;
         let row = self.selected.map_or(0, |r| r as i64 + delta).clamp(0, last.max(0));
         self.select(row as u32, cx);
     }
@@ -166,60 +319,42 @@ impl LogView {
         ((f32::from(height) / ROW_HEIGHT) as i64 - 1).max(1)
     }
 
-    /// Selects the next commit (after the selection) whose hash, subject or author matches the filter.
-    fn find_next(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        let query = self.filter.read(cx).value().trim().to_lowercase();
-        let Some(data) = self.data.clone() else { return };
-        if query.is_empty() || data.is_empty() {
-            return;
-        }
-        let start = self.selected.map_or(0, |r| r + 1);
-        let n = data.len() as u32;
-        for offset in 0..n {
-            let row = (start + offset) % n;
-            let id = data.id(row);
-            if id.to_hex().to_string().starts_with(&query) {
-                return self.select(row, cx);
-            }
-            let Some(meta) = self.meta.get(id) else { continue };
-            if meta.message.to_lowercase().contains(&query) || meta.author.name.to_lowercase().contains(&query) {
-                return self.select(row, cx);
-            }
-        }
-        self.status = format!("No commits match “{query}”").into();
-        cx.notify();
-    }
-
     fn copy_hash(&mut self, cx: &mut Context<Self>) {
-        if let (Some(data), Some(row)) = (&self.data, self.selected) {
-            cx.write_to_clipboard(ClipboardItem::new_string(data.id(row).to_string()));
+        if let Some(id) = self.selected_id() {
+            cx.write_to_clipboard(ClipboardItem::new_string(id.to_string()));
         }
     }
 
     fn open_diff(&mut self, change: FileChange, cx: &mut Context<Self>) {
-        let (Some(data), Some(row)) = (&self.data, self.selected) else { return };
-        crate::diff_view::open(self.repo.clone(), data.id(row), change, cx);
+        let Some(id) = self.selected_id() else { return };
+        crate::diff_view::open(self.repo.clone(), id, change, cx);
     }
 
+    // ---- rendering ----
+
     fn render_rows(&mut self, range: Range<usize>, _window: &mut Window, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let (Some(data), Some(printer)) = (self.data.clone(), self.printer.as_mut()) else { return Vec::new() };
+        let Some(graph) = self.graph.as_mut() else { return Vec::new() };
+        let data = graph.data.clone();
         let theme = cx.theme();
-        let (list_active, background, muted) = (theme.list_active, theme.background, theme.muted_foreground);
-        let min_graph = printer.recommended_width().min(6) as f32 * graph_paint::LANE_WIDTH;
+        let (list_active, background, muted, hover) =
+            (theme.list_active, theme.background, theme.muted_foreground, theme.list_hover);
+        let min_graph = graph.recommended_width().min(6) as f32 * graph_paint::LANE_WIDTH;
         let mut rows = Vec::with_capacity(range.len());
         for row in range {
             let row = row as u32;
-            let elements = printer.row(&data, row);
+            let permanent = graph.permanent_row(row);
+            let elements = graph.print_row(row);
             let graph_width = graph_paint::graph_width(&elements).max(min_graph);
             let selected = self.selected == Some(row);
             let bg = if selected { list_active } else { background };
-            let meta = self.meta.get(data.id(row));
+            let id = data.id(permanent);
+            let meta = self.meta.get(id);
             let (subject, author, date) = match &meta {
                 Some(m) => (m.subject().to_string(), m.author.name.clone(), format_time(m.author.time)),
                 None => (String::new(), String::new(), String::new()),
             };
-            let row_graph = RowGraph { elements, is_head: data.is_head(row), background: bg };
-            let hash = data.id(row).to_hex_with_len(8).to_string();
+            let row_graph = RowGraph { elements, is_head: data.is_head(permanent), background: bg };
+            let hash = id.to_hex_with_len(8).to_string();
             rows.push(
                 div()
                     .id(("row", row as usize))
@@ -228,7 +363,7 @@ impl LogView {
                     .flex()
                     .items_center()
                     .bg(bg)
-                    .when(!selected, |d| d.hover(|s| s.bg(cx.theme().list_hover)))
+                    .when(!selected, |d| d.hover(|s| s.bg(hover)))
                     .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                         window.focus(&this.focus, cx);
                         this.select(row, cx);
@@ -248,11 +383,21 @@ impl LogView {
                             .gap_1()
                             .overflow_hidden()
                             .child(div().flex_shrink(1.).min_w_0().truncate().child(subject))
-                            .children(data.refs_at(row).iter().take(4).map(ref_label)),
+                            .children(data.refs_at(permanent).iter().take(4).map(ref_label)),
                     )
                     .child(div().w(px(160.)).flex_none().px_2().truncate().text_color(muted).child(author))
                     .child(div().w(px(130.)).flex_none().px_2().truncate().text_color(muted).child(date))
-                    .child(div().w(px(90.)).flex_none().px_2().whitespace_nowrap().overflow_hidden().text_color(muted).font_family("monospace").child(hash))
+                    .child(
+                        div()
+                            .w(px(90.))
+                            .flex_none()
+                            .px_2()
+                            .whitespace_nowrap()
+                            .overflow_hidden()
+                            .text_color(muted)
+                            .font_family("monospace")
+                            .child(hash),
+                    )
                     .into_any_element(),
             );
         }
@@ -260,7 +405,7 @@ impl LogView {
     }
 
     fn render_table(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let count = self.data.as_ref().map_or(0, |d| d.len());
+        let count = self.graph.as_ref().map_or(0, |g| g.len());
         let theme = cx.theme();
         let header = |label: &'static str, w: Option<f32>| {
             let d = div().px_2().truncate().child(label);
@@ -268,6 +413,12 @@ impl LogView {
                 Some(w) => d.w(px(w)).flex_none(),
                 None => d.flex_1(),
             }
+        };
+        let empty_message = match &self.graph {
+            Some(g) if g.is_empty() && g.is_filtered() => Some("No commits matching filters"),
+            Some(g) if g.is_empty() => Some("No commits"),
+            None if self.loading => Some("Loading…"),
+            _ => None,
         };
         div()
             .id("log-table")
@@ -296,6 +447,9 @@ impl LogView {
                     .child(header("Date", Some(130.)))
                     .child(header("Hash", Some(90.))),
             )
+            .when_some(empty_message, |d, msg| {
+                d.child(div().p_4().flex().justify_center().text_color(theme.muted_foreground).child(msg))
+            })
             .child(
                 uniform_list("log", count, cx.processor(Self::render_rows))
                     .track_scroll(&self.scroll)
@@ -304,15 +458,86 @@ impl LogView {
             )
     }
 
+    fn render_toolbar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let (border, muted) = (theme.border, theme.muted_foreground);
+        let status: SharedString = if self.filtering {
+            "Filtering…".into()
+        } else {
+            match &self.graph {
+                Some(g) if g.is_filtered() => format!("{} of {}", g.len(), g.data.len()).into(),
+                _ => self.status.clone(),
+            }
+        };
+        let branch_chip = self.filter.branches.first().cloned().map(|name| {
+            Button::new("branch-filter")
+                .small()
+                .outline()
+                .label(format!("Branch: {name} ✕"))
+                .tooltip("Remove branch filter")
+                .on_click(cx.listener(|this, _, _, cx| {
+                    let mut filter = this.filter.clone();
+                    filter.branches.clear();
+                    this.set_filter(filter, cx);
+                }))
+        });
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .px_2()
+            .py_1()
+            .border_b_1()
+            .border_color(border)
+            .child(div().w(px(280.)).child(Input::new(&self.text_input).cleanable(true)))
+            .child(
+                Button::new("regex")
+                    .small()
+                    .ghost()
+                    .label(".*")
+                    .toggled(self.filter.regex)
+                    .tooltip("Regex")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        let mut filter = this.filter.clone();
+                        filter.regex = !filter.regex;
+                        this.set_filter(filter, cx);
+                    })),
+            )
+            .child(
+                Button::new("match-case")
+                    .small()
+                    .ghost()
+                    .label("Aa")
+                    .toggled(self.filter.match_case)
+                    .tooltip("Match case")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        let mut filter = this.filter.clone();
+                        filter.match_case = !filter.match_case;
+                        this.set_filter(filter, cx);
+                    })),
+            )
+            .child(div().w(px(150.)).child(Input::new(&self.user_input).cleanable(true)))
+            .child(div().w(px(200.)).child(Input::new(&self.paths_input).cleanable(true)))
+            .children(branch_chip)
+            .when(!self.filter.is_empty(), |d| {
+                d.child(
+                    Button::new("clear-filters")
+                        .small()
+                        .ghost()
+                        .label("Clear")
+                        .on_click(cx.listener(|this, _, window, cx| this.clear_filters(window, cx))),
+                )
+            })
+            .child(div().flex_1())
+            .child(div().text_color(muted).whitespace_nowrap().child(status))
+    }
+
     fn render_refs(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let mut entries: Vec<AnyElement> = Vec::new();
-        if let Some(data) = self.data.clone() {
-            let sections = [
-                ("Local", RefKind::LocalBranch),
-                ("Remote", RefKind::RemoteBranch),
-                ("Tags", RefKind::Tag),
-            ];
+        if let Some(graph) = &self.graph {
+            let data = graph.data.clone();
+            let sections = [("Local", RefKind::LocalBranch), ("Remote", RefKind::RemoteBranch), ("Tags", RefKind::Tag)];
             for (title, kind) in sections {
                 let mut refs: Vec<&Ref> = data.refs.refs.iter().filter(|r| r.kind == kind).collect();
                 if refs.is_empty() {
@@ -324,8 +549,10 @@ impl LogView {
                 );
                 for r in refs {
                     let target = r.target;
-                    let current = data.refs.current_branch.as_deref() == Some(r.name.as_str()) && kind == RefKind::LocalBranch;
-                    let loaded = data.row_of(&target).is_some();
+                    let name = r.name.clone();
+                    let current = kind == RefKind::LocalBranch && data.refs.current_branch.as_deref() == Some(r.name.as_str());
+                    let visible = graph.row_of(&target).is_some();
+                    let filtered_on = self.filter.branches.contains(&r.name);
                     entries.push(
                         div()
                             .id(SharedString::from(format!("ref-{}", r.full_name)))
@@ -335,15 +562,17 @@ impl LogView {
                             .items_center()
                             .gap_1()
                             .truncate()
-                            .when(!loaded, |d| d.text_color(theme.muted_foreground))
+                            .when(!visible, |d| d.text_color(theme.muted_foreground))
+                            .when(filtered_on, |d| d.bg(theme.list_active))
                             .hover(|s| s.bg(theme.list_hover))
                             .when(current, |d| d.child(div().text_color(ref_color(RefKind::Head)).child("★")))
                             .child(r.name.clone())
-                            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                                if let Some(row) = this.data.as_ref().and_then(|d| d.row_of(&target)) {
+                            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                                if event.click_count() >= 2 {
+                                    this.toggle_branch_filter(name.clone(), cx);
+                                } else {
                                     window.focus(&this.focus, cx);
-                                    this.scroll.scroll_to_item(row as usize, ScrollStrategy::Center);
-                                    this.select(row, cx);
+                                    this.navigate_to(target, window, cx);
                                 }
                             }))
                             .into_any_element(),
@@ -357,10 +586,8 @@ impl LogView {
     fn render_details(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let (muted, border, hover) = (theme.muted_foreground, theme.border, theme.list_hover);
-        let meta = match (&self.data, self.selected) {
-            (Some(data), Some(row)) => self.meta.get(data.id(row)).map(|m| (m, data.clone(), row)),
-            _ => None,
-        };
+        let selected = self.selected_id().zip(self.graph.as_ref().map(|g| g.data.clone()));
+        let meta = selected.and_then(|(id, data)| Some((self.meta.get(id)?, data)));
         let files = self.changes.iter().enumerate().map(|(i, change)| {
             let change_for_click = change.clone();
             let (letter, color) = change_style(change.kind);
@@ -385,10 +612,10 @@ impl LogView {
                     }
                 }))
         });
-        let details = meta.map(|(meta, data, row)| {
-            let parents: Vec<String> =
-                meta.parents.iter().map(|p| p.to_hex_with_len(10).to_string()).collect();
-            let refs: Vec<String> = data.refs_at(row).iter().map(|r| r.name.clone()).collect();
+        let details = meta.map(|(meta, data)| {
+            let parents = meta.parents.clone();
+            let refs: Vec<String> =
+                data.row_of(&meta.id).map(|row| data.refs_at(row).iter().map(|r| r.name.clone()).collect()).unwrap_or_default();
             div()
                 .p_2()
                 .flex()
@@ -403,27 +630,29 @@ impl LogView {
                         .child(format!("{} <{}>", meta.author.name, meta.author.email))
                         .child(format!("authored {}", format_time_full(meta.author.time)))
                         .when(meta.committer.email != meta.author.email || meta.committer.time != meta.author.time, |d| {
-                            d.child(format!(
-                                "committed by {} {}",
-                                meta.committer.name,
-                                format_time_full(meta.committer.time)
-                            ))
+                            d.child(format!("committed by {} {}", meta.committer.name, format_time_full(meta.committer.time)))
                         }),
                 )
                 .child(div().font_family("monospace").text_color(muted).child(meta.id.to_string()))
-                .when(!parents.is_empty(), |d| d.child(div().text_color(muted).child(format!("parents: {}", parents.join(", ")))))
+                .when(!parents.is_empty(), |d| {
+                    d.child(div().flex().flex_wrap().gap_1().text_color(muted).child("parents:").children(
+                        parents.into_iter().map(|p| {
+                            div()
+                                .id(SharedString::from(format!("parent-{p}")))
+                                .font_family("monospace")
+                                .text_color(cx.theme().link)
+                                .cursor_pointer()
+                                .child(p.to_hex_with_len(10).to_string())
+                                .on_click(cx.listener(move |this, _, window, cx| this.navigate_to(p, window, cx)))
+                        }),
+                    ))
+                })
                 .when(!refs.is_empty(), |d| d.child(div().text_color(muted).child(format!("refs: {}", refs.join(", ")))))
         });
         v_resizable("details")
             .child(
                 resizable_panel().child(
-                    div()
-                        .id("changes")
-                        .size_full()
-                        .overflow_y_scroll()
-                        .border_b_1()
-                        .border_color(border)
-                        .children(files),
+                    div().id("changes").size_full().overflow_y_scroll().border_b_1().border_color(border).children(files),
                 ),
             )
             .child(
@@ -435,21 +664,9 @@ impl LogView {
 }
 
 impl Render for LogView {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let _ = window;
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let (bg, fg, border, muted) = (theme.background, theme.foreground, theme.border, theme.muted_foreground);
-        let toolbar = div()
-            .flex()
-            .items_center()
-            .gap_2()
-            .px_2()
-            .py_1()
-            .border_b_1()
-            .border_color(border)
-            .child(div().w(px(320.)).child(Input::new(&self.filter).cleanable(true)))
-            .child(div().flex_1())
-            .child(div().text_color(muted).child(self.status.clone()));
+        let (bg, fg) = (theme.background, theme.foreground);
         div()
             .size_full()
             .flex()
@@ -458,11 +675,11 @@ impl Render for LogView {
             .text_color(fg)
             .text_sm()
             .on_action(cx.listener(|this, _: &FocusFilter, window, cx| {
-                let focus = this.filter.read(cx).focus_handle(cx);
+                let focus = this.text_input.read(cx).focus_handle(cx);
                 window.focus(&focus, cx);
             }))
             .on_action(cx.listener(|this, _: &Refresh, _, cx| this.reload(cx)))
-            .child(toolbar)
+            .child(self.render_toolbar(cx))
             .child(
                 div().flex_1().min_h_0().child(
                     h_resizable("main")

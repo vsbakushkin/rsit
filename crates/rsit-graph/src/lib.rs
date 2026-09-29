@@ -4,6 +4,7 @@
 
 pub mod color;
 pub mod edges_in_row;
+pub mod filter;
 pub mod layout;
 pub mod linear;
 pub mod print;
@@ -12,6 +13,7 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::hash::Hash;
 
+pub use filter::{FilteredGraph, FilteredView};
 pub use layout::GraphLayout;
 pub use linear::{EdgeFilter, EdgeType, GraphCommit, GraphEdge, GraphElement, LinearGraph, PermanentLinearGraph};
 pub use print::{EdgeDir, PrintElement, PrintElementGenerator, PrintKind};
@@ -75,6 +77,27 @@ impl<Id: Clone + Eq + Hash> PermanentGraph<Id> {
             }
         });
         out
+    }
+
+    /// Nodes reachable from `starts` by parent edges (starts included).
+    pub fn reachable_from(&self, starts: impl IntoIterator<Item = u32>) -> Vec<bool> {
+        let mut visited = vec![false; self.len()];
+        let mut stack: Vec<u32> = Vec::new();
+        for s in starts {
+            if (s as usize) < visited.len() && !visited[s as usize] {
+                visited[s as usize] = true;
+                stack.push(s);
+            }
+        }
+        while let Some(node) = stack.pop() {
+            self.linear.for_each_parent(node, |p| {
+                if p >= 0 && !visited[p as usize] {
+                    visited[p as usize] = true;
+                    stack.push(p as u32);
+                }
+            });
+        }
+        visited
     }
 
     pub fn children(&self, node: u32) -> Vec<u32> {

@@ -1,6 +1,7 @@
 //! Git access: gix for reads, the system `git` for writes and a few reads that
 //! gix does not cover yet.
 
+pub mod changes;
 pub mod cli;
 mod graph;
 mod refs;
@@ -190,4 +191,43 @@ pub fn file_at(repo: &gix::Repository, commit: ObjectId, path: &str) -> Result<O
 /// First parent of `commit`, the side IntelliJ compares against by default.
 pub fn first_parent(repo: &gix::Repository, commit: ObjectId) -> Result<Option<ObjectId>> {
     Ok(repo.find_commit(commit)?.parent_ids().next().map(|id| id.detach()))
+}
+
+/// Where one side of a diff comes from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Revision {
+    Commit(ObjectId),
+    /// The staging area.
+    Index,
+    /// Files on disk.
+    WorkTree,
+}
+
+/// Contents of `path` at `rev`; `None` if the file does not exist there.
+pub fn file_at_revision(repo: &Repo, rev: Revision, path: &str) -> Result<Option<Vec<u8>>> {
+    let local = repo.local();
+    match rev {
+        Revision::Commit(id) => file_at(&local, id, path),
+        Revision::Index => {
+            let index = local.index_or_empty()?;
+            let Some(entry) = index.entry_by_path(path.into()) else { return Ok(None) };
+            if entry.stage() != gix::index::entry::Stage::Unconflicted {
+                return Ok(None);
+            }
+            Ok(Some(local.find_object(entry.id)?.detach().data))
+        }
+        Revision::WorkTree => {
+            let Some(workdir) = repo.workdir() else { return Ok(None) };
+            let full = workdir.join(path);
+            match std::fs::symlink_metadata(&full) {
+                Ok(meta) if meta.file_type().is_symlink() => {
+                    Ok(Some(std::fs::read_link(&full)?.to_string_lossy().into_owned().into_bytes()))
+                }
+                Ok(meta) if meta.is_file() => Ok(Some(std::fs::read(&full)?)),
+                Ok(_) => Ok(None),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                Err(e) => Err(e.into()),
+            }
+        }
+    }
 }

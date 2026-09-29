@@ -122,3 +122,37 @@ fn history_operations() {
     ops::delete_branch(p, "renamed", true).unwrap();
     ops::rebase(p, "main").unwrap();
 }
+
+#[test]
+fn conflict_versions_and_resolutions() {
+    use rsit_git::conflicts;
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path();
+    init(p);
+    commit_file(p, "f", "base\n", "base");
+    commit_file(p, "gone", "g\n", "gone");
+    git(p, &["checkout", "-qb", "feature"]);
+    commit_file(p, "f", "theirs\n", "theirs");
+    commit_file(p, "gone", "changed\n", "change gone");
+    git(p, &["checkout", "-q", "main"]);
+    commit_file(p, "f", "ours\n", "ours");
+    git(p, &["rm", "-q", "gone"]);
+    git(p, &["commit", "-qm", "delete gone"]);
+    assert!(ops::merge(p, "feature").is_err());
+    let repo = rsit_git::Repo::discover(p).unwrap();
+
+    let v = conflicts::conflict_versions(&repo, "f").unwrap();
+    assert_eq!((v.base.as_deref(), v.ours.as_deref(), v.theirs.as_deref()), (Some(&b"base\n"[..]), Some(&b"ours\n"[..]), Some(&b"theirs\n"[..])));
+    assert!(v.mergeable());
+    let gone = conflicts::conflict_versions(&repo, "gone").unwrap();
+    assert!(gone.ours.is_none() && gone.theirs.is_some() && !gone.mergeable(), "modify/delete");
+    let (left, right) = conflicts::side_labels(&repo);
+    assert_eq!((left.as_str(), right.as_str()), ("Yours (main)", "Theirs (feature)"));
+
+    conflicts::save_resolved(&repo, "f", "merged\n").unwrap();
+    conflicts::accept_side(&repo, "gone", true).unwrap(); // ours deleted it
+    assert!(conflicts::conflicted_paths(p).unwrap().is_empty());
+    assert!(!p.join("gone").exists());
+    ops::continue_operation(p, Operation::Merge).unwrap();
+    assert_eq!(std::fs::read_to_string(p.join("f")).unwrap(), "merged\n");
+}

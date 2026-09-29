@@ -3,6 +3,7 @@
 
 pub mod changes;
 pub mod cli;
+pub mod conflicts;
 mod graph;
 pub mod history;
 pub mod ops;

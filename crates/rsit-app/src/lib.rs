@@ -1,14 +1,20 @@
 //! rsit UI: the log window and its dialogs. The binary in `main.rs` only parses
 //! arguments and opens the window, so UI tests can drive the same views.
 
+pub mod blame_view;
 pub mod commit_menu;
 pub mod commit_panel;
 pub mod diff_model;
 pub mod diff_view;
+pub mod file_picker;
+pub mod file_view;
 pub mod git_actions;
 pub mod graph_paint;
+pub mod history_view;
 pub mod log_view;
+pub mod navigator;
 pub mod tasks;
+pub mod text;
 pub mod workspace;
 
 /// Initializes gpui-kit and rsit key bindings.
@@ -18,6 +24,8 @@ pub fn init(cx: &mut gpui_kit::App) {
     diff_view::init(cx);
     commit_panel::init(cx);
     workspace::init(cx);
+    history_view::init(cx);
+    file_view::init(cx);
 }
 
 gpui_kit::assets::icon_assets!(ExtraIcons, [GitBranch, ArrowDownToLine, ArrowUpFromLine]);

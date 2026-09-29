@@ -15,12 +15,12 @@ use rsit_diff::{Change, ChangeKind, DiffRows, Folding, Layout, Row, WhitespacePo
 use rsit_git::{FileChange, ObjectId, Repo};
 
 use crate::diff_model::{ChangeAction, DiffItem, DiffSide, FileDiff};
+use crate::text::{clip, expand_tabs, max_columns};
 
 const CONTEXT: &str = "DiffView";
 const ROW_HEIGHT: f32 = 20.0;
 const GUTTER: f32 = 48.0;
 const FOLD_CONTEXT: u32 = 4;
-const TAB_WIDTH: usize = 4;
 /// Approximate advance of a monospace glyph at the diff font size, used to
 /// bound horizontal scrolling.
 const CHAR_WIDTH: f32 = 8.0;
@@ -48,6 +48,8 @@ struct Settings {
 
 pub struct DiffView {
     repo: Repo,
+    /// Embedded in another view (file history): no window close on Escape.
+    embedded: bool,
     files: Vec<DiffItem>,
     selected: usize,
     settings: Settings,
@@ -94,6 +96,7 @@ impl DiffView {
         window.focus(&focus, cx);
         let mut this = Self {
             repo,
+            embedded: false,
             files,
             selected: 0,
             settings: Settings {
@@ -115,6 +118,27 @@ impl DiffView {
         };
         this.select_file(selected, cx);
         this
+    }
+
+    /// A diff meant to live inside another view (e.g. file history).
+    pub fn embedded(repo: Repo, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let mut this = Self::new(repo, Vec::new(), 0, window, cx);
+        this.embedded = true;
+        this
+    }
+
+    /// Replaces the files and shows `selected`.
+    pub fn set_items(&mut self, files: Vec<DiffItem>, selected: usize, cx: &mut Context<Self>) {
+        self.files = files;
+        self.diff = None;
+        self.error = None;
+        if self.files.is_empty() {
+            self.rows = DiffRows { rows: Vec::new(), change_starts: Vec::new() };
+            self._load = None;
+            cx.notify();
+        } else {
+            self.select_file(selected.min(self.files.len() - 1), cx);
+        }
     }
 
     fn select_file(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -171,6 +195,17 @@ impl DiffView {
             .ok();
         }));
         cx.notify();
+    }
+
+    /// Revision (`None` = working tree) and path of the right side, if it can be annotated.
+    fn annotate_target(&self) -> Option<(Option<ObjectId>, String)> {
+        let item = self.files.get(self.selected)?;
+        match item.right? {
+            rsit_git::Revision::Commit(id) => Some((Some(id), item.change.path.clone())),
+            rsit_git::Revision::WorkTree => Some((None, item.change.path.clone())),
+            // the index has no blame
+            rsit_git::Revision::Index => None,
+        }
     }
 
     /// The action available for changes of the selected file, if any.
@@ -499,6 +534,14 @@ impl DiffView {
                     .on_click(cx.listener(|this, _, _, cx| this.update_settings(|s| s.words = !s.words, cx))),
             )
             .child(div().flex_1())
+            .children(self.annotate_target().map(|(rev, file)| {
+                let repo = self.repo.clone();
+                Button::new("annotate").small().ghost().label("Annotate").tooltip("Annotate this version").on_click(
+                    move |_, _, cx| {
+                        crate::file_view::open(repo.clone(), file.clone(), rev, crate::file_view::FileTab::Annotate, cx)
+                    },
+                )
+            }))
             .children(path.map(|p| div().text_color(muted).truncate().child(p)))
     }
 
@@ -539,6 +582,9 @@ impl DiffView {
         };
         if let Some(error) = &self.error {
             return message(error.clone());
+        }
+        if self.files.is_empty() {
+            return message("Select a revision".into());
         }
         let Some(diff) = &self.diff else {
             return message("Loading…".into());
@@ -620,7 +666,11 @@ impl Render for DiffView {
                     this.select_file(this.selected - 1, cx)
                 }
             }))
-            .on_action(|_: &CloseDiff, window, _| window.remove_window())
+            .on_action(cx.listener(|this, _: &CloseDiff, window, _| {
+                if !this.embedded {
+                    window.remove_window()
+                }
+            }))
             .on_action(cx.listener(|this, _: &ApplyChangeAction, window, cx| this.apply_action_to_current(window, cx)))
             .size_full()
             .flex()
@@ -629,13 +679,15 @@ impl Render for DiffView {
             .text_color(fg)
             .text_sm()
             .child(self.render_toolbar(cx))
-            .child(
-                div().flex_1().min_h_0().child(
-                    h_resizable("diff-main")
-                        .child(resizable_panel().size(px(260.)).child(self.render_files(cx)))
-                        .child(resizable_panel().child(self.render_body(cx))),
-                ),
-            )
+            .child(div().flex_1().min_h_0().child(if self.files.len() > 1 {
+                h_resizable("diff-main")
+                    .child(resizable_panel().size(px(260.)).child(self.render_files(cx)))
+                    .child(resizable_panel().child(self.render_body(cx)))
+                    .into_any_element()
+            } else {
+                // a single file needs no file list
+                self.render_body(cx)
+            }))
     }
 }
 
@@ -772,56 +824,6 @@ fn cell(
     };
     let (display, highlights) = expand_tabs(text, highlights);
     base.child(div().flex_none().ml(px(-h_offset)).child(StyledText::new(display).with_highlights(highlights)))
-}
-
-/// Widest line in display columns (tabs expanded to the next stop).
-fn max_columns(text: &str) -> usize {
-    text.lines()
-        .map(|line| line.chars().fold(0, |col, c| if c == '\t' { col + TAB_WIDTH - col % TAB_WIDTH } else { col + 1 }))
-        .max()
-        .unwrap_or(0)
-}
-
-/// Highlights overlapping `range`, shifted to be relative to its start.
-fn clip<'a>(
-    styles: &'a [(Range<usize>, HighlightStyle)],
-    range: &'a Range<usize>,
-) -> impl Iterator<Item = (Range<usize>, HighlightStyle)> + 'a {
-    let first = styles.partition_point(|(r, _)| r.end <= range.start);
-    styles[first..]
-        .iter()
-        .take_while(|(r, _)| r.start < range.end)
-        .filter(|(r, _)| r.end > range.start)
-        .map(|(r, s)| (r.start.max(range.start) - range.start..r.end.min(range.end) - range.start, *s))
-}
-
-/// Replaces tabs with spaces up to the next tab stop, remapping highlight ranges.
-fn expand_tabs(
-    text: &str,
-    highlights: Vec<(Range<usize>, HighlightStyle)>,
-) -> (String, Vec<(Range<usize>, HighlightStyle)>) {
-    if !text.contains('\t') {
-        return (text.to_string(), highlights);
-    }
-    let mut out = String::with_capacity(text.len() + 16);
-    let mut map = vec![0usize; text.len() + 1];
-    let mut column = 0;
-    for (i, ch) in text.char_indices() {
-        for b in 0..ch.len_utf8() {
-            map[i + b] = out.len();
-        }
-        if ch == '\t' {
-            let n = TAB_WIDTH - column % TAB_WIDTH;
-            out.extend(std::iter::repeat_n(' ', n));
-            column += n;
-        } else {
-            out.push(ch);
-            column += 1;
-        }
-    }
-    map[text.len()] = out.len();
-    let highlights = highlights.into_iter().map(|(r, s)| (map[r.start]..map[r.end], s)).collect();
-    (out, highlights)
 }
 
 fn clone_diff(diff: &FileDiff) -> FileDiff {

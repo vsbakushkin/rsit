@@ -26,7 +26,7 @@ pub struct DiffSide {
 }
 
 impl DiffSide {
-    fn new(bytes: Option<Vec<u8>>, language: &str, theme: &HighlightTheme) -> Self {
+    pub fn new(bytes: Option<Vec<u8>>, language: &str, theme: &HighlightTheme) -> Self {
         let exists = bytes.is_some();
         let text = String::from_utf8_lossy(&bytes.unwrap_or_default()).into_owned();
         let line_starts = Lines::new(&text).starts;

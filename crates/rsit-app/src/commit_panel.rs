@@ -612,6 +612,15 @@ impl CommitPanel {
                     Group::Conflicts => {}
                 }
                 menu = menu.item(item("Show Diff", |t, g, p, _, cx| t.show_diff(g, &p, cx)));
+                if group != Group::Unversioned {
+                    menu = menu
+                        .item(item("Show History", |t, _, p, _, cx| {
+                            crate::file_view::open(t.repo.clone(), p, None, crate::file_view::FileTab::History, cx)
+                        }))
+                        .item(item("Annotate", |t, _, p, _, cx| {
+                            crate::file_view::open(t.repo.clone(), p, None, crate::file_view::FileTab::Annotate, cx)
+                        }));
+                }
                 match group {
                     Group::Unversioned => {
                         menu = menu.separator().item(item("Delete…", |t, g, p, w, cx| t.rollback(g, vec![p], w, cx)))

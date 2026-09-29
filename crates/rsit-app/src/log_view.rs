@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::menu::ContextMenuExt as _;
+use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenuItem};
 use gpui_kit::component::resizable::{h_resizable, resizable_panel, v_resizable};
 use gpui_kit::component::{ActiveTheme as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -384,7 +384,7 @@ impl LogView {
     }
 
     /// Selects `id`, dropping filters that hide it.
-    fn navigate_to(&mut self, id: ObjectId, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn navigate_to(&mut self, id: ObjectId, window: &mut Window, cx: &mut Context<Self>) {
         let Some(graph) = &self.graph else { return };
         match graph.row_of(&id) {
             Some(row) => {
@@ -817,6 +817,42 @@ impl LogView {
                         this.open_diff(i, cx);
                     }
                 }))
+                .context_menu({
+                    let (view, repo, path, commit) =
+                        (cx.entity().downgrade(), self.repo.clone(), change.path.clone(), self.selected_id());
+                    let deleted = change.kind == rsit_git::ChangeKind::Deleted;
+                    move |menu, _, _| {
+                        let view = view.clone();
+                        let (repo_h, path_h) = (repo.clone(), path.clone());
+                        let (repo_a, path_a) = (repo.clone(), path.clone());
+                        let menu = menu
+                            .item(PopupMenuItem::new("Show Diff").on_click(move |_, _, cx| {
+                                view.update(cx, |this, cx| this.open_diff(i, cx)).ok();
+                            }))
+                            .item(PopupMenuItem::new("Show History").on_click(move |_, _, cx| {
+                                crate::file_view::open(
+                                    repo_h.clone(),
+                                    path_h.clone(),
+                                    commit,
+                                    crate::file_view::FileTab::History,
+                                    cx,
+                                )
+                            }));
+                        if deleted {
+                            menu
+                        } else {
+                            menu.item(PopupMenuItem::new("Annotate Revision").on_click(move |_, _, cx| {
+                                crate::file_view::open(
+                                    repo_a.clone(),
+                                    path_a.clone(),
+                                    commit,
+                                    crate::file_view::FileTab::Annotate,
+                                    cx,
+                                )
+                            }))
+                        }
+                    }
+                })
         });
         let containing = self.containing.clone();
         let details = meta.map(|(meta, data)| {

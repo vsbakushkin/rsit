@@ -49,7 +49,8 @@ fn parse_history(bytes: &[u8]) -> Result<Vec<FileRevision>> {
         }
         let commit = ObjectId::from_hex(fields[0].as_bytes()).ok().context("bad commit id")?;
         let parents = fields[1].split_whitespace().filter_map(|p| ObjectId::from_hex(p.as_bytes()).ok()).collect();
-        let mut tokens = parts.map(|t| String::from_utf8_lossy(t).trim_start_matches('\n').to_string()).filter(|t| !t.is_empty());
+        let mut tokens =
+            parts.map(|t| String::from_utf8_lossy(t).trim_start_matches('\n').to_string()).filter(|t| !t.is_empty());
         // merge commits may list no files; keep them out like IntelliJ does
         let Some(status) = tokens.next() else { continue };
         let (kind, old_path, path) = match status.as_bytes().first() {

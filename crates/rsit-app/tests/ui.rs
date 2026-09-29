@@ -424,3 +424,97 @@ async fn branches_popup_lists_branches(cx: &mut TestAppContext) {
     })
     .unwrap();
 }
+
+#[gpui_kit::test]
+async fn file_view_annotates_and_shows_history(cx: &mut TestAppContext) {
+    isolate_cache();
+    let repo_dir = demo_repo();
+    let p = repo_dir.path();
+    std::fs::write(p.join("f1"), "one\n").unwrap();
+    git(p, &["commit", "-qam", "set f1"]);
+    std::fs::write(p.join("f1"), "one\nlocal\n").unwrap();
+    cx.update(rsit_app::init);
+    let repo = rsit_git::Repo::discover(p).unwrap();
+    let (window, view) = cx.update(|cx| {
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(Bounds {
+                origin: point(px(0.), px(0.)),
+                size: size(px(1200.), px(800.)),
+            })),
+            ..Default::default()
+        };
+        gpui_kit::open_window(options, cx, |window, cx| {
+            cx.new(|cx| {
+                rsit_app::file_view::FileView::new(
+                    repo,
+                    "f1".into(),
+                    None,
+                    rsit_app::file_view::FileTab::Annotate,
+                    window,
+                    cx,
+                )
+            })
+        })
+        .unwrap()
+    });
+    let window: gpui_kit::AnyWindowHandle = window;
+    cx.run_until_parked();
+    let blame = cx.update(|cx| view.read(cx).blame().cloned()).unwrap();
+    assert_eq!(cx.update(|cx| blame.read(cx).line_count()), 2);
+    assert_eq!(cx.update(|cx| blame.read(cx).commit_of_line(0)).as_deref(), Some("set f1"));
+    assert_eq!(
+        cx.update(|cx| blame.read(cx).commit_of_line(1)).as_deref(),
+        Some("Version of f1 from f1"),
+        "uncommitted"
+    );
+
+    cx.update_window(window, |_, window, cx| window.click("tab-history", cx)).unwrap();
+    cx.run_until_parked();
+    let history = cx.update(|cx| view.read(cx).history().cloned()).unwrap();
+    let subjects: Vec<String> =
+        cx.update(|cx| history.read(cx).revisions().iter().map(|r| r.subject.clone()).collect());
+    assert_eq!(subjects, ["set f1", "c1"]);
+    cx.update_window(window, |_, window, _| assert!(window.try_find(("revision", 0usize)).is_some())).unwrap();
+}
+
+#[gpui_kit::test]
+async fn go_to_file_picks_with_keyboard(cx: &mut TestAppContext) {
+    isolate_cache();
+    let repo_dir = demo_repo();
+    cx.update(rsit_app::init);
+    let repo = rsit_git::Repo::discover(repo_dir.path()).unwrap();
+    let (window, _) = cx.update(|cx| {
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(Bounds {
+                origin: point(px(0.), px(0.)),
+                size: size(px(1400.), px(800.)),
+            })),
+            ..Default::default()
+        };
+        gpui_kit::open_window(options, cx, |window, cx| {
+            cx.new(|cx| rsit_app::workspace::Workspace::new(repo, Default::default(), false, window, cx))
+        })
+        .unwrap()
+    });
+    let window: gpui_kit::AnyWindowHandle = window;
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| window.click("go-to-file", cx)).unwrap();
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.input("f", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        assert!(window.try_find(("file-match", 1usize)).is_some(), "several matches for 'f'");
+        window.press("down", cx);
+        window.press("down", cx);
+        window.press("up", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let windows_before = cx.update(|cx| cx.windows().len());
+    cx.update_window(window, |_, window, cx| window.press("enter", cx)).unwrap();
+    cx.run_until_parked();
+    assert_eq!(cx.update(|cx| cx.windows().len()), windows_before + 1, "a file window opened");
+}

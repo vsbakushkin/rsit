@@ -15,7 +15,7 @@ use crate::git_actions;
 use crate::log_view::{LogLoaded, LogView};
 use crate::tasks::Activity;
 
-actions!(workspace, [ToggleCommitPanel, Fetch, Update, Push]);
+actions!(workspace, [ToggleCommitPanel, Fetch, Update, Push, GoToFile]);
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
@@ -23,6 +23,7 @@ pub fn init(cx: &mut App) {
         // IntelliJ: Update Project, Push
         KeyBinding::new("ctrl-t", Update, None),
         KeyBinding::new("ctrl-shift-k", Push, None),
+        KeyBinding::new("ctrl-shift-n", GoToFile, None),
     ]);
 }
 
@@ -48,6 +49,7 @@ impl Workspace {
     pub fn new(repo: Repo, filter: LogFilter, watch: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let commit = cx.new(|cx| CommitPanel::new(repo.clone(), watch, window, cx));
         let log = cx.new(|cx| LogView::with_options(repo.clone(), filter, watch, window, cx));
+        crate::navigator::register(window.window_handle(), log.downgrade(), cx);
         let subscriptions = vec![
             cx.subscribe(&log, |this, _, _: &LogLoaded, cx| this.refresh_branch(cx)),
             cx.observe_global::<Activity>(|_, cx| cx.notify()),
@@ -128,6 +130,16 @@ impl Workspace {
                 action("push", IconName::ArrowUpFromLine, "Push (Ctrl+Shift+K)").on_click(
                     cx.listener(|this, _, window, cx| git_actions::push_current(&this.repo, false, window, cx)),
                 ),
+            )
+            .child(
+                Button::new("go-to-file")
+                    .small()
+                    .ghost()
+                    .icon(IconName::Search)
+                    .tooltip("Go to File (Ctrl+Shift+N)")
+                    .on_click(
+                        cx.listener(|this, _, window, cx| crate::file_picker::open(this.repo.clone(), window, cx)),
+                    ),
             )
             .child(div().flex_1())
             .children(activity.map(|a| div().text_color(muted).text_sm().truncate().child(a)))

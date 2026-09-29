@@ -28,6 +28,12 @@ struct Args {
     /// Open only the diff of this revision (e.g. `HEAD`, a hash or a branch).
     #[arg(long)]
     diff: Option<String>,
+    /// Annotate this file (IntelliJ "Annotate with Git Blame").
+    #[arg(long, value_name = "FILE")]
+    blame: Option<PathBuf>,
+    /// Show the history of this file.
+    #[arg(long, value_name = "FILE")]
+    history: Option<PathBuf>,
 }
 
 actions!(rsit, [Quit]);
@@ -59,8 +65,34 @@ fn main() {
         }
     };
 
+    let file = match (&args.blame, &args.history) {
+        (Some(f), _) => Some((f.clone(), rsit_app::file_view::FileTab::Annotate)),
+        (None, Some(f)) => Some((f.clone(), rsit_app::file_view::FileTab::History)),
+        _ => None,
+    };
+    let file = match file.map(|(f, tab)| repo_relative(&repo, &f).map(|p| (p, tab))).transpose() {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("rsit: {e:#}");
+            std::process::exit(1);
+        }
+    };
+
     gpui_kit::application().with_assets(rsit_app::AppAssets).run(move |cx| {
         rsit_app::init(cx);
+        if let Some((path, tab)) = file {
+            cx.bind_keys([KeyBinding::new("ctrl-q", Quit, None)]);
+            cx.on_action(|_: &Quit, cx| cx.quit());
+            cx.on_window_closed(|cx, _| {
+                if cx.windows().is_empty() {
+                    cx.quit();
+                }
+            })
+            .detach();
+            rsit_app::file_view::open(repo, path, None, tab, cx);
+            cx.activate(true);
+            return;
+        }
         if let Some((commit, files)) = diff {
             cx.bind_keys([KeyBinding::new("ctrl-q", Quit, None)]);
             cx.on_action(|_: &Quit, cx| cx.quit());
@@ -110,4 +142,22 @@ fn resolve_diff(repo: &rsit_git::Repo, rev: &str) -> anyhow::Result<(rsit_git::O
     let commit = local.rev_parse_single(rev)?.object()?.peel_to_commit()?.id;
     let files = rsit_git::changed_files(&local, commit)?;
     Ok((commit, files))
+}
+
+/// Path of `file` relative to the repository's working tree.
+fn repo_relative(repo: &rsit_git::Repo, file: &std::path::Path) -> anyhow::Result<String> {
+    let workdir = repo.workdir().ok_or_else(|| anyhow::anyhow!("bare repository"))?;
+    let absolute = std::path::absolute(file)?;
+    // the file may be deleted; canonicalize its directory instead
+    let absolute = match absolute.canonicalize() {
+        Ok(p) => p,
+        Err(_) => absolute
+            .parent()
+            .and_then(|d| d.canonicalize().ok())
+            .map(|d| d.join(absolute.file_name().unwrap_or_default()))
+            .unwrap_or(absolute),
+    };
+    let relative =
+        absolute.strip_prefix(workdir).map_err(|_| anyhow::anyhow!("{} is outside the repository", file.display()))?;
+    Ok(relative.to_string_lossy().replace('\\', "/"))
 }

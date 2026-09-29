@@ -38,21 +38,22 @@ fn history_follows_renames_and_blame_attributes_lines() {
     std::fs::write(p.join("new.rs"), "fn a() {}\nfn b2() {}\nfn c() {}\nfn d() {}\n").unwrap();
 
     let h = history::file_history(p, "new.rs", None).unwrap();
-    let summary: Vec<(&str, ChangeKind, &str)> = h.iter().map(|r| (r.subject.as_str(), r.kind, r.path.as_str())).collect();
-    assert_eq!(summary, [
-        ("edit b", ChangeKind::Modified, "new.rs"),
-        ("rename", ChangeKind::Renamed, "new.rs"),
-        ("create", ChangeKind::Added, "old.rs"),
-    ]);
+    let summary: Vec<(&str, ChangeKind, &str)> =
+        h.iter().map(|r| (r.subject.as_str(), r.kind, r.path.as_str())).collect();
+    assert_eq!(
+        summary,
+        [
+            ("edit b", ChangeKind::Modified, "new.rs"),
+            ("rename", ChangeKind::Renamed, "new.rs"),
+            ("create", ChangeKind::Added, "old.rs"),
+        ]
+    );
     assert_eq!(h[1].old_path.as_deref(), Some("old.rs"));
 
     // working tree: the new line is not committed yet
     let b = history::blame(p, "new.rs", None, BlameOptions::default()).unwrap();
-    let who: Vec<(&str, bool)> = b
-        .lines
-        .iter()
-        .map(|l| (b.commits[l.commit].summary.as_str(), b.commits[l.commit].uncommitted))
-        .collect();
+    let who: Vec<(&str, bool)> =
+        b.lines.iter().map(|l| (b.commits[l.commit].summary.as_str(), b.commits[l.commit].uncommitted)).collect();
     assert_eq!(who[0], ("create", false), "survives the rename");
     assert_eq!(who[1], ("edit b", false));
     assert!(who[3].1, "fn d() is not committed");

@@ -165,3 +165,52 @@ async fn arrow_click_jumps_to_far_end(cx: &mut TestAppContext) {
     let selected = cx.update(|cx| view.read(cx).selected_id()).unwrap();
     assert_eq!(selected.to_string(), c0);
 }
+
+#[gpui_kit::test]
+async fn diff_view_navigates_and_folds(cx: &mut TestAppContext) {
+    isolate_cache();
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path();
+    git(p, &["init", "-q", "-b", "main"]);
+    let before: String = (0..40).map(|i| format!("line {i}\n")).collect();
+    std::fs::write(p.join("a.txt"), &before).unwrap();
+    git(p, &["add", "."]);
+    git(p, &["commit", "-qm", "base"]);
+    let after = before.replace("line 5\n", "line five\n").replace("line 30\n", "line thirty\n");
+    std::fs::write(p.join("a.txt"), after).unwrap();
+    git(p, &["commit", "-qam", "edit"]);
+
+    cx.update(rsit_app::init);
+    let repo = rsit_git::Repo::discover(p).unwrap();
+    let local = repo.local();
+    let commit = local.rev_parse_single("HEAD").unwrap().detach();
+    let files = rsit_git::changed_files(&local, commit).unwrap();
+    let (window, view) = cx.update(|cx| {
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(Bounds { origin: point(px(0.), px(0.)), size: size(px(1200.), px(800.)) })),
+            ..Default::default()
+        };
+        gpui_kit::open_window(options, cx, |window, cx| {
+            cx.new(|cx| rsit_app::diff_view::DiffView::new(repo, commit, files, 0, window, cx))
+        })
+        .unwrap()
+    });
+    let window: gpui_kit::AnyWindowHandle = window;
+    cx.run_until_parked();
+    // two changes, opened at the first; unchanged lines folded around them
+    assert_eq!(cx.update(|cx| view.read(cx).change_position()), (Some(0), 2));
+    let folded_rows = cx.update(|cx| view.read(cx).row_count());
+    assert!(folded_rows < 40, "folded to {folded_rows} rows");
+
+    cx.update_window(window, |_, window, cx| window.press("f7", cx)).unwrap();
+    assert_eq!(cx.update(|cx| view.read(cx).change_position()), (Some(1), 2));
+
+    cx.update_window(window, |_, window, cx| window.click(("fold", 10usize), cx)).unwrap();
+    cx.run_until_parked();
+    assert!(cx.update(|cx| view.read(cx).row_count()) > folded_rows, "fold expanded");
+
+    cx.update_window(window, |_, window, cx| window.click("layout", cx)).unwrap();
+    cx.run_until_parked();
+    // unified: each modified line shows as a deletion plus an insertion
+    assert!(cx.update(|cx| view.read(cx).row_count()) > folded_rows + 2);
+}

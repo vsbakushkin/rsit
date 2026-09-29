@@ -409,9 +409,9 @@ impl LogView {
         }
     }
 
-    fn open_diff(&mut self, change: FileChange, cx: &mut Context<Self>) {
+    fn open_diff(&mut self, index: usize, cx: &mut Context<Self>) {
         let Some(id) = self.selected_id() else { return };
-        crate::diff_view::open(self.repo.clone(), id, change, cx);
+        crate::diff_view::open(self.repo.clone(), id, self.changes.clone(), index, cx);
     }
 
     // ---- rendering ----
@@ -423,6 +423,7 @@ impl LogView {
         let (list_active, background, muted, hover) =
             (theme.list_active, theme.background, theme.muted_foreground, theme.list_hover);
         let min_graph = graph.recommended_width().min(6) as f32 * graph_paint::LANE_WIDTH;
+        let mono = theme.mono_font_family.clone();
         let mut rows = Vec::with_capacity(range.len());
         for row in range {
             let row = row as u32;
@@ -514,7 +515,7 @@ impl LogView {
                             .whitespace_nowrap()
                             .overflow_hidden()
                             .text_color(muted)
-                            .font_family("monospace")
+                            .font_family(mono.clone())
                             .child(hash),
                     )
                     .into_any_element(),
@@ -717,7 +718,6 @@ impl LogView {
         let selected = self.selected_id().zip(self.graph.as_ref().map(|g| g.data.clone()));
         let meta = selected.and_then(|(id, data)| Some((self.meta.get(id)?, data)));
         let files = self.changes.iter().enumerate().map(|(i, change)| {
-            let change_for_click = change.clone();
             let (letter, color) = change_style(change.kind);
             let (dir, name) = match change.path.rsplit_once('/') {
                 Some((dir, name)) => (dir.to_string(), name.to_string()),
@@ -736,7 +736,7 @@ impl LogView {
                 .child(div().flex_1().min_w_0().truncate().text_color(muted).child(dir))
                 .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
                     if event.click_count() >= 2 {
-                        this.open_diff(change_for_click.clone(), cx);
+                        this.open_diff(i, cx);
                     }
                 }))
         });
@@ -762,13 +762,13 @@ impl LogView {
                             d.child(format!("committed by {} {}", meta.committer.name, format_time_full(meta.committer.time)))
                         }),
                 )
-                .child(div().font_family("monospace").text_color(muted).child(meta.id.to_string()))
+                .child(div().font_family(cx.theme().mono_font_family.clone()).text_color(muted).child(meta.id.to_string()))
                 .when(!parents.is_empty(), |d| {
                     d.child(div().flex().flex_wrap().gap_1().text_color(muted).child("parents:").children(
                         parents.into_iter().map(|p| {
                             div()
                                 .id(SharedString::from(format!("parent-{p}")))
-                                .font_family("monospace")
+                                .font_family(cx.theme().mono_font_family.clone())
                                 .text_color(cx.theme().link)
                                 .cursor_pointer()
                                 .child(p.to_hex_with_len(10).to_string())
@@ -856,7 +856,7 @@ fn ref_label(r: &Ref) -> AnyElement {
         .into_any_element()
 }
 
-fn change_style(kind: rsit_git::ChangeKind) -> (char, Hsla) {
+pub fn change_style(kind: rsit_git::ChangeKind) -> (char, Hsla) {
     use rsit_git::ChangeKind::*;
     let color: Hsla = match kind {
         Added => rgb(0x62B543).into(),

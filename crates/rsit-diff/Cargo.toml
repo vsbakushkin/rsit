@@ -1,0 +1,8 @@
+[package]
+name = "rsit-diff"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+imara-diff.workspace = true

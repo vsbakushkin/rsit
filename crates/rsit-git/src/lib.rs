@@ -176,3 +176,18 @@ pub fn changed_files(repo: &gix::Repository, commit: ObjectId) -> Result<Vec<Fil
     out.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(out)
 }
+
+/// Contents of `path` in `commit`, `None` if the file does not exist there.
+pub fn file_at(repo: &gix::Repository, commit: ObjectId, path: &str) -> Result<Option<Vec<u8>>> {
+    let tree = repo.find_commit(commit)?.tree()?;
+    let Some(entry) = tree.lookup_entry_by_path(path)? else { return Ok(None) };
+    if !entry.mode().is_blob_or_symlink() {
+        return Ok(None);
+    }
+    Ok(Some(entry.object()?.detach().data))
+}
+
+/// First parent of `commit`, the side IntelliJ compares against by default.
+pub fn first_parent(repo: &gix::Repository, commit: ObjectId) -> Result<Option<ObjectId>> {
+    Ok(repo.find_commit(commit)?.parent_ids().next().map(|id| id.detach()))
+}

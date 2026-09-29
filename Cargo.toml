@@ -8,11 +8,12 @@ license = "Apache-2.0"
 version = "0.1.0"
 
 [workspace.dependencies]
-gpui-kit = { version = "=0.7.0", features = ["tree-sitter-diff"] }
+gpui-kit = { version = "=0.7.0", features = ["tree-sitter-languages"] }
 gix = { version = "0.88", default-features = false, features = ["sha1", "max-performance-safe", "revision", "blob-diff", "index", "status", "mailmap"] }
 anyhow = "1"
 notify = "8"
 rayon = "1"
+imara-diff = "0.2"
 regex = "1"
 futures = { version = "0.3", features = ["executor"] }
 thiserror = "2"
@@ -22,6 +23,7 @@ rsit-graph = { path = "crates/rsit-graph" }
 rsit-git = { path = "crates/rsit-git" }
 rsit-log = { path = "crates/rsit-log" }
 rsit-index = { path = "crates/rsit-index" }
+rsit-diff = { path = "crates/rsit-diff" }
 
 [profile.dev.package."*"]
 opt-level = 2

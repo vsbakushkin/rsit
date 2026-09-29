@@ -26,6 +26,9 @@ struct Args {
     /// Initial path filter; may be repeated.
     #[arg(long = "path")]
     paths: Vec<String>,
+    /// Open only the diff of this revision (e.g. `HEAD`, a hash or a branch).
+    #[arg(long)]
+    diff: Option<String>,
 }
 
 actions!(rsit, [Quit]);
@@ -49,8 +52,35 @@ fn main() {
         }
     };
 
+    let diff = match args.diff.as_deref().map(|rev| resolve_diff(&repo, rev)).transpose() {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("rsit: {e:#}");
+            std::process::exit(1);
+        }
+    };
+
     gpui_kit::application().run(move |cx| {
         rsit_app::init(cx);
+        if let Some((commit, files)) = diff {
+            cx.bind_keys([KeyBinding::new("ctrl-q", Quit, None)]);
+            cx.on_action(|_: &Quit, cx| cx.quit());
+            cx.on_window_closed(|cx, _| {
+                if cx.windows().is_empty() {
+                    cx.quit();
+                }
+            })
+            .detach();
+            // `--path` picks the file to show first
+            let first = filter
+                .paths
+                .first()
+                .and_then(|p| files.iter().position(|f| f.path == *p || f.path.ends_with(p.as_str())))
+                .unwrap_or(0);
+            rsit_app::diff_view::open(repo, commit, files, first, cx);
+            cx.activate(true);
+            return;
+        }
         cx.bind_keys([KeyBinding::new("ctrl-q", Quit, None)]);
         cx.on_action(|_: &Quit, cx| cx.quit());
 
@@ -73,4 +103,11 @@ fn main() {
         .detach();
         cx.activate(true);
     });
+}
+
+fn resolve_diff(repo: &rsit_git::Repo, rev: &str) -> anyhow::Result<(rsit_git::ObjectId, Vec<rsit_git::FileChange>)> {
+    let local = repo.local();
+    let commit = local.rev_parse_single(rev)?.object()?.peel_to_commit()?.id;
+    let files = rsit_git::changed_files(&local, commit)?;
+    Ok((commit, files))
 }

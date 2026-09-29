@@ -1,7 +1,9 @@
 //! The Log: refs on the left, commit table with the graph in the middle,
 //! changed files and commit details on the right (IntelliJ Git → Log).
 
+use std::cell::Cell;
 use std::ops::Range;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -312,7 +314,7 @@ impl LogView {
 
     // ---- selection ----
 
-    fn selected_id(&self) -> Option<ObjectId> {
+    pub fn selected_id(&self) -> Option<ObjectId> {
         Some(self.graph.as_ref()?.id(self.selected?))
     }
 
@@ -361,6 +363,18 @@ impl LogView {
             }
             None => {}
         }
+    }
+
+    /// Follows the arrow of a long edge under the given point of `row`'s graph.
+    fn jump_by_arrow(&mut self, row: u32, x: f32, y: f32, cx: &mut Context<Self>) -> bool {
+        let Some(graph) = self.graph.as_mut() else { return false };
+        let elements = graph.print_row(row);
+        let Some(target) = graph_paint::element_at(&elements, x, y).and_then(graph_paint::arrow_target) else {
+            return false;
+        };
+        self.scroll.scroll_to_item(target as usize, ScrollStrategy::Center);
+        self.select(target, cx);
+        true
     }
 
     fn move_selection(&mut self, delta: i64, cx: &mut Context<Self>) {
@@ -432,12 +446,31 @@ impl LogView {
                             this.select(row, cx);
                         }),
                     )
-                    .child(
-                        canvas(|_, _, _| (), move |bounds, _, window, _| graph_paint::paint_row(bounds, row_graph, window))
-                            .w(px(graph_width))
-                            .h(px(ROW_HEIGHT))
-                            .flex_none(),
-                    )
+                    .child({
+                        // bounds from the last paint, to hit-test clicks on arrows
+                        let painted = Rc::new(Cell::new(None::<Bounds<Pixels>>));
+                        let painted_for_click = painted.clone();
+                        div()
+                            .id(("graph", row as usize))
+                            .test_support()
+                            .flex_none()
+                            .child(
+                                canvas(|_, _, _| (), move |bounds, _, window, _| {
+                                    painted.set(Some(bounds));
+                                    graph_paint::paint_row(bounds, row_graph, window)
+                                })
+                                .w(px(graph_width))
+                                .h(px(ROW_HEIGHT)),
+                            )
+                            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                                let Some(bounds) = painted_for_click.get() else { return };
+                                let local = event.position() - bounds.origin;
+                                if this.jump_by_arrow(row, f32::from(local.x), f32::from(local.y), cx) {
+                                    window.focus(&this.focus, cx);
+                                    cx.stop_propagation();
+                                }
+                            }))
+                    })
                     .child(
                         div()
                             .flex_1()

@@ -44,6 +44,10 @@ fn demo_repo() -> tempfile::TempDir {
 }
 
 fn open(cx: &mut TestAppContext, repo: &Path) -> gpui_kit::AnyWindowHandle {
+    open_view(cx, repo).0
+}
+
+fn open_view(cx: &mut TestAppContext, repo: &Path) -> (gpui_kit::AnyWindowHandle, gpui_kit::Entity<LogView>) {
     cx.update(rsit_app::init);
     let repo = rsit_git::Repo::discover(repo).unwrap();
     cx.update(|cx| {
@@ -51,11 +55,11 @@ fn open(cx: &mut TestAppContext, repo: &Path) -> gpui_kit::AnyWindowHandle {
             window_bounds: Some(WindowBounds::Windowed(Bounds { origin: point(px(0.), px(0.)), size: size(px(1200.), px(800.)) })),
             ..Default::default()
         };
-        let (window, _) = gpui_kit::open_window(options, cx, |window, cx| {
+        let (window, view) = gpui_kit::open_window(options, cx, |window, cx| {
             cx.new(|cx| LogView::with_options(repo, Default::default(), false, window, cx))
         })
         .unwrap();
-        window
+        (window, view)
     })
 }
 
@@ -107,4 +111,48 @@ async fn context_menu_creates_tag(cx: &mut TestAppContext) {
     let tagged = git(&dir, &["rev-list", "-n1", "v-test"]);
     let data = rsit_log::LogData::load(rsit_git::Repo::discover(&dir).unwrap(), None).unwrap();
     assert_eq!(tagged.trim(), data.id(1).to_string(), "tag is on the right-clicked row");
+}
+
+/// main: c0 ... c40; feature: c0 - f1 (newest), so f1 -> c0 is a long edge
+/// drawn with an arrow right below f1.
+#[gpui_kit::test]
+async fn arrow_click_jumps_to_far_end(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path();
+    let commit = |msg: &str, t: u32| {
+        let date = format!("@{} +0000", 1_700_000_000 + t * 60);
+        let out = Command::new("git")
+            .current_dir(p)
+            .args(["commit", "-q", "--allow-empty", "-m", msg])
+            .env("GIT_AUTHOR_NAME", "T")
+            .env("GIT_AUTHOR_EMAIL", "t@e")
+            .env("GIT_COMMITTER_NAME", "T")
+            .env("GIT_COMMITTER_EMAIL", "t@e")
+            .env("GIT_AUTHOR_DATE", &date)
+            .env("GIT_COMMITTER_DATE", &date)
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+    };
+    git(p, &["init", "-q", "-b", "main"]);
+    commit("c0", 0);
+    git(p, &["branch", "feature"]);
+    for i in 1..=40 {
+        commit(&format!("c{i}"), i);
+    }
+    git(p, &["checkout", "-q", "feature"]);
+    commit("f1", 100);
+    git(p, &["checkout", "-q", "main"]);
+    let c0 = git(p, &["rev-parse", "main~40"]).trim().to_string();
+
+    let (window, view) = open_view(cx, p);
+    cx.wait_for(window, Duration::from_secs(10), |window, _| window.try_find(("graph", 1usize)).is_some()).await;
+    // row 1 is c40; the f1 -> c0 edge passes it in lane 1 with a down arrow
+    cx.update_window(window, |_, window, cx| {
+        window.click_at(("graph", 1usize), point(px(24.), px(17.)), cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let selected = cx.update(|cx| view.read(cx).selected_id()).unwrap();
+    assert_eq!(selected.to_string(), c0);
 }

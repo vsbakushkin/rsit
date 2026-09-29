@@ -150,3 +150,38 @@ fn circle(window: &mut Window, center: Point<Pixels>, radius: f32, color: Hsla) 
     let bounds = Bounds::new(center - gpui_kit::point(r, r), size(r * 2.0, r * 2.0));
     window.paint_quad(fill(bounds, color).corner_radii(r));
 }
+
+/// Element under a point in row-local coordinates (IntelliJ `getElementUnderCursor`):
+/// nodes win over edges.
+pub fn element_at(elements: &[PrintElement], x: f32, y: f32) -> Option<&PrintElement> {
+    let row_center = (ROW_HEIGHT / 2.0).floor();
+    let element_center = (LANE_WIDTH / 2.0).floor();
+    let center_x = |pos: u32| LANE_WIDTH * pos as f32 + element_center;
+    let node = elements.iter().find(|e| {
+        e.kind == PrintKind::Node && (center_x(e.pos) - x).hypot(row_center - y) <= CIRCLE_RADIUS
+    });
+    node.or_else(|| {
+        elements.iter().find(|e| {
+            let dir = match e.kind {
+                PrintKind::Edge { dir, .. } | PrintKind::Terminal { dir } => dir,
+                PrintKind::Node => return false,
+            };
+            let (x1, y1) = (center_x(e.pos), row_center);
+            let x2 = center_x(e.other_pos());
+            let y2 = if dir == EdgeDir::Down { ROW_HEIGHT + row_center } else { row_center - ROW_HEIGHT };
+            (x1 - x).hypot(y1 - y) + (x2 - x).hypot(y2 - y) < (x1 - x2).hypot(y1 - y2) + LINE
+        })
+    })
+}
+
+/// Row an arrow leads to: the far end of a long edge whose middle is hidden.
+pub fn arrow_target(element: &PrintElement) -> Option<u32> {
+    let rsit_graph::GraphElement::Edge(edge) = element.element else { return None };
+    match element.kind {
+        PrintKind::Edge { arrow: true, dir, .. } | PrintKind::Terminal { dir } => match dir {
+            EdgeDir::Down => edge.down,
+            EdgeDir::Up => edge.up,
+        },
+        _ => None,
+    }
+}

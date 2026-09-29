@@ -66,7 +66,7 @@ pub struct RebasePlan {
 }
 
 impl RebasePlan {
-    /// Commits from `from` (inclusive) up to HEAD.
+    /// Commits from `from` (inclusive) up to HEAD (IntelliJ "from here").
     pub fn from_commit(cwd: &Path, from: ObjectId) -> Result<Self> {
         let from = from.to_string();
         if run(cwd, &["merge-base", "--is-ancestor", &from, "HEAD"]).is_err() {
@@ -75,6 +75,16 @@ impl RebasePlan {
         let base = run(cwd, &["rev-parse", "--verify", "--quiet", &format!("{from}^")])
             .ok()
             .and_then(|s| ObjectId::from_hex(s.trim().as_bytes()).ok());
+        Self::after(cwd, base)
+    }
+
+    /// Commits after `base` up to HEAD, like `git rebase -i <base>`; `None` from the root.
+    pub fn after(cwd: &Path, base: Option<ObjectId>) -> Result<Self> {
+        if let Some(base) = base {
+            if run(cwd, &["merge-base", "--is-ancestor", &base.to_string(), "HEAD"]).is_err() {
+                bail!("{} is not an ancestor of HEAD", base.to_hex_with_len(8));
+            }
+        }
         let range = match base {
             Some(base) => format!("{base}..HEAD"),
             None => "HEAD".to_string(),
@@ -120,7 +130,8 @@ impl RebasePlan {
 
     /// Default message of a commit with squashed commits: all messages, like git.
     pub fn combined_message(&self, target: usize) -> String {
-        let mut parts = vec![self.entries[target].new_message.clone().unwrap_or_else(|| self.entries[target].message.clone())];
+        let mut parts =
+            vec![self.entries[target].new_message.clone().unwrap_or_else(|| self.entries[target].message.clone())];
         for e in &self.entries[target + 1..] {
             match e.action {
                 Action::Squash => parts.push(e.message.clone()),
@@ -193,9 +204,8 @@ pub fn run_interactive(cwd: &Path, plan: &RebasePlan) -> Result<String> {
     let out = cmd.output()?;
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     // keep the messages while the rebase is stopped (its exec lines still need them)
-    let stopped = run(cwd, &["rev-parse", "--git-path", "rebase-merge"])
-        .map(|p| cwd.join(p.trim()).exists())
-        .unwrap_or(true);
+    let stopped =
+        run(cwd, &["rev-parse", "--git-path", "rebase-merge"]).map(|p| cwd.join(p.trim()).exists()).unwrap_or(true);
     if !stopped {
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -226,7 +236,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut plan = RebasePlan {
             base: None,
-            entries: vec![entry(1, Action::Reword), entry(2, Action::Squash), entry(3, Action::Drop), entry(4, Action::Edit)],
+            entries: vec![
+                entry(1, Action::Reword),
+                entry(2, Action::Squash),
+                entry(3, Action::Drop),
+                entry(4, Action::Edit),
+            ],
         };
         plan.entries[0].new_message = Some("new".into());
         let todo = plan.todo(dir.path()).unwrap();

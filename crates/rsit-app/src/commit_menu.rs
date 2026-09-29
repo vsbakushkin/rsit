@@ -153,6 +153,18 @@ pub fn build(
             menu
         });
     }
+    {
+        let repo = repo.clone();
+        menu = menu.item(PopupMenuItem::new("Interactively Rebase from Here…").on_click(move |_, window, cx| {
+            match rsit_git::rebase::RebasePlan::from_commit(repo.cwd(), id) {
+                Ok(plan) => crate::rebase_view::open(repo.clone(), plan, cx),
+                Err(e) => window.push_notification(
+                    gpui_kit::component::notification::Notification::warning(format!("Cannot rebase: {e:#}")),
+                    cx,
+                ),
+            }
+        }));
+    }
     menu = menu.separator();
     {
         let view = view.clone();

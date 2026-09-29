@@ -13,6 +13,13 @@ pub struct Navigator {
 
 impl Global for Navigator {}
 
+impl Navigator {
+    /// The main window.
+    pub fn window(&self) -> AnyWindowHandle {
+        self.window
+    }
+}
+
 pub fn register(window: AnyWindowHandle, log: WeakEntity<LogView>, cx: &mut App) {
     cx.set_global(Navigator { window, log });
 }

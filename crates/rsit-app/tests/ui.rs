@@ -518,3 +518,61 @@ async fn go_to_file_picks_with_keyboard(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(cx.update(|cx| cx.windows().len()), windows_before + 1, "a file window opened");
 }
+
+#[gpui_kit::test]
+async fn rebase_dialog_squashes_and_rewords(cx: &mut TestAppContext) {
+    isolate_cache();
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path();
+    git(p, &["init", "-q", "-b", "main"]);
+    git(p, &["config", "user.name", "T"]);
+    git(p, &["config", "user.email", "t@e"]);
+    for i in 0..4 {
+        std::fs::write(p.join(format!("f{i}")), "x\n").unwrap();
+        git(p, &["add", "."]);
+        git(p, &["commit", "-qm", &format!("c{i}")]);
+    }
+    cx.update(rsit_app::init);
+    let repo = rsit_git::Repo::discover(p).unwrap();
+    let base = rsit_git::ObjectId::from_hex(git(p, &["rev-parse", "HEAD~3"]).trim().as_bytes()).unwrap();
+    let plan = rsit_git::rebase::RebasePlan::after(p, Some(base)).unwrap(); // c1, c2, c3
+    let (window, view) = cx.update(|cx| {
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(Bounds {
+                origin: point(px(0.), px(0.)),
+                size: size(px(1100.), px(640.)),
+            })),
+            ..Default::default()
+        };
+        gpui_kit::open_window(options, cx, |window, cx| {
+            cx.new(|cx| rsit_app::rebase_view::RebaseView::new(repo, plan, window, cx))
+        })
+        .unwrap()
+    });
+    let window: gpui_kit::AnyWindowHandle = window;
+    cx.run_until_parked();
+    // keyboard on the table: row 0 stays, "s" on row 1 squashes c2 into c1, "d" drops c3
+    cx.update_window(window, |_, window, cx| {
+        window.click(("rebase-row", 1usize), cx);
+        window.press("s", cx);
+        window.press("d", cx);
+    })
+    .unwrap();
+    let actions: Vec<_> = cx.update(|cx| view.read(cx).plan().entries.iter().map(|e| e.action).collect());
+    use rsit_git::rebase::Action;
+    assert_eq!(actions, [Action::Pick, Action::Squash, Action::Drop]);
+
+    // the squash target's combined message is editable
+    cx.update_window(window, |_, window, cx| {
+        window.click(("rebase-row", 0usize), cx);
+        window.click("rebase-message", cx);
+        window.press("ctrl-a", cx);
+        window.input("c1 and c2", cx);
+    })
+    .unwrap();
+    cx.update_window(window, |_, window, cx| window.click("start-rebase", cx)).unwrap();
+    cx.run_until_parked();
+    let log: Vec<String> = git(p, &["log", "--format=%s"]).lines().map(str::to_string).collect();
+    assert_eq!(log, ["c1 and c2", "c0"]);
+    assert!(!p.join("f3").exists(), "c3 dropped");
+}

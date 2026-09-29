@@ -34,6 +34,9 @@ struct Args {
     /// Show the history of this file.
     #[arg(long, value_name = "FILE")]
     history: Option<PathBuf>,
+    /// Interactively rebase the commits after BASE (like `git rebase -i BASE`).
+    #[arg(long, value_name = "BASE")]
+    rebase: Option<String>,
 }
 
 actions!(rsit, [Quit]);
@@ -78,8 +81,27 @@ fn main() {
         }
     };
 
+    let rebase = match args.rebase.as_deref().map(|base| resolve_rebase(&repo, base)).transpose() {
+        Ok(plan) => plan,
+        Err(e) => {
+            eprintln!("rsit: {e:#}");
+            std::process::exit(1);
+        }
+    };
+
     gpui_kit::application().with_assets(rsit_app::AppAssets).run(move |cx| {
         rsit_app::init(cx);
+        if let Some(plan) = rebase {
+            cx.on_window_closed(|cx, _| {
+                if cx.windows().is_empty() {
+                    cx.quit();
+                }
+            })
+            .detach();
+            rsit_app::rebase_view::open(repo, plan, cx);
+            cx.activate(true);
+            return;
+        }
         if let Some((path, tab)) = file {
             cx.bind_keys([KeyBinding::new("ctrl-q", Quit, None)]);
             cx.on_action(|_: &Quit, cx| cx.quit());
@@ -160,4 +182,9 @@ fn repo_relative(repo: &rsit_git::Repo, file: &std::path::Path) -> anyhow::Resul
     let relative =
         absolute.strip_prefix(workdir).map_err(|_| anyhow::anyhow!("{} is outside the repository", file.display()))?;
     Ok(relative.to_string_lossy().replace('\\', "/"))
+}
+
+fn resolve_rebase(repo: &rsit_git::Repo, base: &str) -> anyhow::Result<rsit_git::rebase::RebasePlan> {
+    let base = repo.local().rev_parse_single(base)?.object()?.peel_to_commit()?.id;
+    rsit_git::rebase::RebasePlan::after(repo.cwd(), Some(base))
 }

@@ -44,7 +44,10 @@ fn reword_squash_fixup_drop_reorder() {
     let dir = repo();
     let p = dir.path();
     let mut plan = plan_from(p, "HEAD~4"); // c1..c5
-    assert_eq!(plan.entries.iter().map(|e| e.subject().to_string()).collect::<Vec<_>>(), ["c1", "c2", "c3", "c4", "c5"]);
+    assert_eq!(
+        plan.entries.iter().map(|e| e.subject().to_string()).collect::<Vec<_>>(),
+        ["c1", "c2", "c3", "c4", "c5"]
+    );
 
     plan.entries[0].action = Action::Reword;
     plan.entries[0].new_message = Some("c1 reworded".into());

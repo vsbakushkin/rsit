@@ -45,12 +45,26 @@ fn update_activity<R>(cx: &mut App, f: impl FnOnce(&mut Activity) -> R) -> R {
 pub type Op = Box<dyn FnOnce(&std::path::Path, &mut dyn FnMut(&str)) -> anyhow::Result<String> + Send>;
 
 /// Runs `op` in the background. `success` is the notification text on success
-/// (`None` stays silent); errors always notify and stay until dismissed.
+/// (`None` stays silent, an empty text shows what `op` returned); errors
+/// always notify and stay until dismissed.
 pub fn run_git_task(
     label: impl Into<SharedString>,
     cwd: PathBuf,
     success: Option<String>,
     op: Op,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    run_git_task_then(label, cwd, success, op, |_, _| {}, window, cx)
+}
+
+/// Like [`run_git_task`], calling `done` in the window once the task finished.
+pub fn run_git_task_then(
+    label: impl Into<SharedString>,
+    cwd: PathBuf,
+    success: Option<String>,
+    op: Op,
+    done: impl FnOnce(&mut Window, &mut App) + 'static,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -91,14 +105,19 @@ pub fn run_git_task(
             cx.update(|window, cx| {
                 update_activity(cx, |activity| activity.tasks.retain(|t| t.id != id));
                 match result {
-                    Ok(_) => {
-                        if let Some(message) = success {
+                    Ok(output) => {
+                        let message = match success {
+                            Some(m) if m.is_empty() => Some(output.trim().to_string()),
+                            other => other,
+                        };
+                        if let Some(message) = message.filter(|m| !m.is_empty()) {
                             window.push_notification(Notification::success(message), cx);
                         }
                     }
                     Err(e) => window
                         .push_notification(Notification::error(format!("{label} failed: {e:#}")).autohide(false), cx),
                 }
+                done(window, cx);
             })
             .ok();
         })

@@ -132,7 +132,11 @@ impl MergeModel {
     }
 
     pub fn unresolved_conflicts(&self) -> usize {
-        self.chunks.iter().zip(&self.resolutions).filter(|(c, r)| c.kind == ChunkKind::Conflict && !r.is_resolved()).count()
+        self.chunks
+            .iter()
+            .zip(&self.resolutions)
+            .filter(|(c, r)| c.kind == ChunkKind::Conflict && !r.is_resolved())
+            .count()
     }
 
     /// IntelliJ "Apply All Non-Conflicting Changes".
@@ -158,7 +162,11 @@ impl MergeModel {
             if c.kind != ChunkKind::Conflict || self.resolutions[index].is_resolved() {
                 continue;
             }
-            let (base, left, right) = (self.chunk_text(Side::Base, index), self.chunk_text(Side::Left, index), self.chunk_text(Side::Right, index));
+            let (base, left, right) = (
+                self.chunk_text(Side::Base, index),
+                self.chunk_text(Side::Left, index),
+                self.chunk_text(Side::Right, index),
+            );
             if let Some(merged) = merge_words(base, left, right) {
                 self.resolutions[index].merged = Some(merged);
                 resolved += 1;

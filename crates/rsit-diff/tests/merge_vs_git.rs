@@ -56,7 +56,14 @@ fn clean_merges_agree_with_git() {
         std::fs::write(path("base"), &bt).unwrap();
         std::fs::write(path("left"), &lt).unwrap();
         std::fs::write(path("right"), &rt).unwrap();
-        let out = Command::new("git").arg("merge-file").arg("-p").arg(path("left")).arg(path("base")).arg(path("right")).output().unwrap();
+        let out = Command::new("git")
+            .arg("merge-file")
+            .arg("-p")
+            .arg(path("left"))
+            .arg(path("base"))
+            .arg(path("right"))
+            .output()
+            .unwrap();
         let git_conflicts = out.status.code().unwrap_or(-1);
 
         let mut model = MergeModel::new(bt.clone(), lt.clone(), rt.clone(), WhitespacePolicy::Default);
@@ -66,10 +73,17 @@ fn clean_merges_agree_with_git() {
             if model.unresolved_conflicts() == 0 {
                 compared += 1;
                 model.apply_non_conflicting();
-                assert_eq!(model.result(), String::from_utf8_lossy(&out.stdout), "case {case}:\nbase:\n{bt}\nleft:\n{lt}\nright:\n{rt}");
+                assert_eq!(
+                    model.result(),
+                    String::from_utf8_lossy(&out.stdout),
+                    "case {case}:\nbase:\n{bt}\nleft:\n{lt}\nright:\n{rt}"
+                );
             }
         } else {
-            assert!(model.unresolved_conflicts() > 0, "case {case}: git conflicts but we do not\nbase:\n{bt}\nleft:\n{lt}\nright:\n{rt}");
+            assert!(
+                model.unresolved_conflicts() > 0,
+                "case {case}: git conflicts but we do not\nbase:\n{bt}\nleft:\n{lt}\nright:\n{rt}"
+            );
         }
     }
     assert!(compared * 10 >= clean * 8, "compared {compared} of {clean} clean merges");

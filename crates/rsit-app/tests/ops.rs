@@ -142,7 +142,10 @@ fn conflict_versions_and_resolutions() {
     let repo = rsit_git::Repo::discover(p).unwrap();
 
     let v = conflicts::conflict_versions(&repo, "f").unwrap();
-    assert_eq!((v.base.as_deref(), v.ours.as_deref(), v.theirs.as_deref()), (Some(&b"base\n"[..]), Some(&b"ours\n"[..]), Some(&b"theirs\n"[..])));
+    assert_eq!(
+        (v.base.as_deref(), v.ours.as_deref(), v.theirs.as_deref()),
+        (Some(&b"base\n"[..]), Some(&b"ours\n"[..]), Some(&b"theirs\n"[..]))
+    );
     assert!(v.mergeable());
     let gone = conflicts::conflict_versions(&repo, "gone").unwrap();
     assert!(gone.ours.is_none() && gone.theirs.is_some() && !gone.mergeable(), "modify/delete");

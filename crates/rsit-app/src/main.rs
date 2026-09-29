@@ -34,6 +34,9 @@ struct Args {
     /// Show the history of this file.
     #[arg(long, value_name = "FILE")]
     history: Option<PathBuf>,
+    /// Resolve the merge conflict in this file.
+    #[arg(long, value_name = "FILE")]
+    merge: Option<PathBuf>,
     /// Interactively rebase the commits after BASE (like `git rebase -i BASE`).
     #[arg(long, value_name = "BASE")]
     rebase: Option<String>,
@@ -81,6 +84,13 @@ fn main() {
         }
     };
 
+    let merge = match args.merge.as_deref().map(|f| repo_relative(&repo, f)).transpose() {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("rsit: {e:#}");
+            std::process::exit(1);
+        }
+    };
     let rebase = match args.rebase.as_deref().map(|base| resolve_rebase(&repo, base)).transpose() {
         Ok(plan) => plan,
         Err(e) => {
@@ -91,6 +101,17 @@ fn main() {
 
     gpui_kit::application().with_assets(rsit_app::AppAssets).run(move |cx| {
         rsit_app::init(cx);
+        if let Some(path) = merge {
+            cx.on_window_closed(|cx, _| {
+                if cx.windows().is_empty() {
+                    cx.quit();
+                }
+            })
+            .detach();
+            rsit_app::merge_view::open(repo, path, cx);
+            cx.activate(true);
+            return;
+        }
         if let Some(plan) = rebase {
             cx.on_window_closed(|cx, _| {
                 if cx.windows().is_empty() {

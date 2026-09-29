@@ -22,7 +22,9 @@ pub struct ConflictVersions {
 
 impl ConflictVersions {
     pub fn is_binary(&self) -> bool {
-        [&self.base, &self.ours, &self.theirs].iter().any(|v| v.as_ref().is_some_and(|b| b[..b.len().min(8000)].contains(&0)))
+        [&self.base, &self.ours, &self.theirs]
+            .iter()
+            .any(|v| v.as_ref().is_some_and(|b| b[..b.len().min(8000)].contains(&0)))
     }
 
     /// Both sides have the file: a text merge is possible.
@@ -63,12 +65,14 @@ pub fn side_labels(repo: &Repo) -> (String, String) {
             let commit = short("REBASE_HEAD").unwrap_or_default();
             (format!("Upstream ({onto})"), format!("Your commit ({commit})"))
         }
-        Some(Operation::CherryPick) => {
-            (format!("Yours ({})", branch.unwrap_or_else(|| "HEAD".into())), format!("Cherry-picked ({})", short("CHERRY_PICK_HEAD").unwrap_or_default()))
-        }
-        Some(Operation::Revert) => {
-            (format!("Yours ({})", branch.unwrap_or_else(|| "HEAD".into())), format!("Reverted ({})", short("REVERT_HEAD").unwrap_or_default()))
-        }
+        Some(Operation::CherryPick) => (
+            format!("Yours ({})", branch.unwrap_or_else(|| "HEAD".into())),
+            format!("Cherry-picked ({})", short("CHERRY_PICK_HEAD").unwrap_or_default()),
+        ),
+        Some(Operation::Revert) => (
+            format!("Yours ({})", branch.unwrap_or_else(|| "HEAD".into())),
+            format!("Reverted ({})", short("REVERT_HEAD").unwrap_or_default()),
+        ),
         _ => {
             let theirs = merge_head_name(repo).or_else(|| short("MERGE_HEAD")).unwrap_or_else(|| "theirs".into());
             (format!("Yours ({})", branch.unwrap_or_else(|| "HEAD".into())), format!("Theirs ({theirs})"))

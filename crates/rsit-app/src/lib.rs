@@ -12,6 +12,7 @@ pub mod git_actions;
 pub mod graph_paint;
 pub mod history_view;
 pub mod log_view;
+pub mod merge_view;
 pub mod navigator;
 pub mod rebase_view;
 pub mod tasks;
@@ -28,6 +29,7 @@ pub fn init(cx: &mut gpui_kit::App) {
     history_view::init(cx);
     file_view::init(cx);
     rebase_view::init(cx);
+    merge_view::init(cx);
 }
 
 gpui_kit::assets::icon_assets!(ExtraIcons, [GitBranch, ArrowDownToLine, ArrowUpFromLine]);

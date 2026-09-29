@@ -576,3 +576,68 @@ async fn rebase_dialog_squashes_and_rewords(cx: &mut TestAppContext) {
     assert_eq!(log, ["c1 and c2", "c0"]);
     assert!(!p.join("f3").exists(), "c3 dropped");
 }
+
+#[gpui_kit::test]
+async fn merge_window_resolves_and_stages(cx: &mut TestAppContext) {
+    isolate_cache();
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path();
+    git(p, &["init", "-q", "-b", "main"]);
+    git(p, &["config", "user.name", "T"]);
+    git(p, &["config", "user.email", "t@e"]);
+    let base: String = (1..=12).map(|i| format!("line {i}\n")).collect();
+    std::fs::write(p.join("f"), &base).unwrap();
+    git(p, &["add", "."]);
+    git(p, &["commit", "-qm", "base"]);
+    git(p, &["checkout", "-qb", "feature"]);
+    std::fs::write(p.join("f"), base.replace("line 2\n", "line 2 theirs\n").replace("line 10\n", "line 10 theirs\n"))
+        .unwrap();
+    git(p, &["commit", "-qam", "feature"]);
+    git(p, &["checkout", "-q", "main"]);
+    std::fs::write(p.join("f"), base.replace("line 6\n", "line 6 ours\n").replace("line 10\n", "line 10 ours\n"))
+        .unwrap();
+    git(p, &["commit", "-qam", "main"]);
+    assert!(!Command::new("git").current_dir(p).args(["merge", "feature"]).output().unwrap().status.success());
+
+    cx.update(rsit_app::init);
+    let repo = rsit_git::Repo::discover(p).unwrap();
+    let (window, view) = cx.update(|cx| {
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(Bounds {
+                origin: point(px(0.), px(0.)),
+                size: size(px(1500.), px(900.)),
+            })),
+            ..Default::default()
+        };
+        gpui_kit::open_window(options, cx, |window, cx| {
+            cx.new(|cx| rsit_app::merge_view::MergeView::new(repo, "f".into(), window, cx))
+        })
+        .unwrap()
+    });
+    let window: gpui_kit::AnyWindowHandle = window;
+    cx.run_until_parked();
+    let counts = |cx: &mut TestAppContext| {
+        cx.update(|cx| view.read(cx).model().map(|m| (m.unresolved(), m.unresolved_conflicts()))).unwrap()
+    };
+    assert_eq!(counts(cx), (3, 1));
+
+    cx.update_window(window, |_, window, cx| window.click("apply-non-conflicting", cx)).unwrap();
+    assert_eq!(counts(cx), (1, 1));
+    // the conflict is chunk 2: take ours, then append theirs
+    cx.update_window(window, |_, window, cx| {
+        window.click(("apply-left", 2usize), cx);
+        window.click(("apply-right", 2usize), cx);
+    })
+    .unwrap();
+    assert_eq!(counts(cx), (0, 0));
+    cx.update_window(window, |_, window, cx| window.click("apply-merge", cx)).unwrap();
+    cx.run_until_parked();
+
+    let merged = std::fs::read_to_string(p.join("f")).unwrap();
+    let expected = base
+        .replace("line 2\n", "line 2 theirs\n")
+        .replace("line 6\n", "line 6 ours\n")
+        .replace("line 10\n", "line 10 ours\nline 10 theirs\n");
+    assert_eq!(merged, expected);
+    assert!(rsit_git::conflicts::conflicted_paths(p).unwrap().is_empty(), "staged as resolved");
+}

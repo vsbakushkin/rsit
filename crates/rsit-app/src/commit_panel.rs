@@ -251,6 +251,15 @@ impl CommitPanel {
         });
     }
 
+    fn accept_side(&mut self, path: String, ours: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let repo = self.repo.clone();
+        self.run(
+            move |_| rsit_git::conflicts::accept_side(&repo, &path, ours).map(|_| Some(format!("Resolved {path}"))),
+            window,
+            cx,
+        );
+    }
+
     fn finish_operation(&mut self, abort: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(op) = self.operation else { return };
         let (verb, done) = if abort { ("Aborting", "aborted") } else { ("Continuing", "completed") };
@@ -294,6 +303,15 @@ impl CommitPanel {
                 .border_b_1()
                 .border_color(theme.border)
                 .child(div().flex_1().min_w(px(160.)).child(text))
+                .when(conflicts > 0, |d| {
+                    d.child(Button::new("resolve-conflicts").xsmall().primary().label("Resolve…").on_click(
+                        cx.listener(|this, _, _, cx| {
+                            if let Some(path) = this.status.conflicted().next().map(|e| e.path.clone()) {
+                                crate::merge_view::open(this.repo.clone(), path, cx);
+                            }
+                        }),
+                    ))
+                })
                 .when(op != Operation::Other, |d| {
                     d.child(
                         Button::new("continue-operation")
@@ -547,7 +565,11 @@ impl CommitPanel {
                     window.focus(&this.focus, cx);
                     this.selected = Some((group, path.clone()));
                     if event.click_count() >= 2 {
-                        this.show_diff(group, &path, cx);
+                        if group == Group::Conflicts {
+                            crate::merge_view::open(this.repo.clone(), path.clone(), cx);
+                        } else {
+                            this.show_diff(group, &path, cx);
+                        }
                     }
                     cx.notify();
                 }))
@@ -609,7 +631,13 @@ impl CommitPanel {
                     Group::Unstaged | Group::Unversioned => {
                         menu = menu.item(item("Stage", |t, _, p, w, cx| t.stage(vec![p], w, cx)))
                     }
-                    Group::Conflicts => {}
+                    Group::Conflicts => {
+                        menu = menu
+                            .item(item("Merge…", |t, _, p, _, cx| crate::merge_view::open(t.repo.clone(), p, cx)))
+                            .item(item("Accept Yours", |t, _, p, w, cx| t.accept_side(p, true, w, cx)))
+                            .item(item("Accept Theirs", |t, _, p, w, cx| t.accept_side(p, false, w, cx)))
+                            .separator();
+                    }
                 }
                 menu = menu.item(item("Show Diff", |t, g, p, _, cx| t.show_diff(g, &p, cx)));
                 if group != Group::Unversioned {

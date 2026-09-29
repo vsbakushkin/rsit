@@ -21,6 +21,9 @@ const ROW_HEIGHT: f32 = 20.0;
 const GUTTER: f32 = 48.0;
 const FOLD_CONTEXT: u32 = 4;
 const TAB_WIDTH: usize = 4;
+/// Approximate advance of a monospace glyph at the diff font size, used to
+/// bound horizontal scrolling.
+const CHAR_WIDTH: f32 = 8.0;
 
 actions!(diff, [NextChange, PrevChange, NextFile, PrevFile, CloseDiff]);
 
@@ -53,6 +56,10 @@ pub struct DiffView {
     rows: DiffRows,
     expanded: HashSet<u32>,
     current_change: Option<usize>,
+    /// Horizontal scroll of both sides, in pixels.
+    h_offset: f32,
+    /// Widest line in characters (tabs expanded), for the scroll limit.
+    max_columns: usize,
     error: Option<SharedString>,
     scroll: UniformListScrollHandle,
     focus: FocusHandle,
@@ -104,6 +111,8 @@ impl DiffView {
             rows: DiffRows { rows: Vec::new(), change_starts: Vec::new() },
             expanded: HashSet::new(),
             current_change: None,
+            h_offset: 0.0,
+            max_columns: 0,
             error: None,
             scroll: UniformListScrollHandle::new(),
             focus,
@@ -130,6 +139,8 @@ impl DiffView {
             this.update(cx, |this, cx| {
                 match diff {
                     Ok(diff) => {
+                        this.max_columns = max_columns(&diff.left.text).max(max_columns(&diff.right.text));
+                        this.h_offset = 0.0;
                         this.diff = Some(Arc::new(diff));
                         this.rebuild_rows();
                         // open at the first change, like IntelliJ
@@ -179,6 +190,19 @@ impl DiffView {
         (self.current_change, self.rows.change_starts.len())
     }
 
+    pub fn horizontal_offset(&self) -> f32 {
+        self.h_offset
+    }
+
+    fn scroll_horizontally(&mut self, delta: f32, cx: &mut Context<Self>) {
+        let max = (self.max_columns as f32 * CHAR_WIDTH - 200.0).max(0.0);
+        let offset = (self.h_offset - delta).clamp(0.0, max);
+        if offset != self.h_offset {
+            self.h_offset = offset;
+            cx.notify();
+        }
+    }
+
     pub fn row_count(&self) -> usize {
         self.rows.rows.len()
     }
@@ -225,6 +249,7 @@ impl DiffView {
         let words = self.settings.words;
         let current = self.current_change;
         let mono = cx.theme().mono_font_family.clone();
+        let offset = self.h_offset;
         range
             .map(|ix| {
                 let row = self.rows.rows[ix].clone();
@@ -254,10 +279,10 @@ impl DiffView {
                         match self.settings.layout {
                             Layout::SideBySide => row_el
                                 .child(gutter(left, change, is_current, &colors))
-                                .child(cell(&diff.left, left, change, Side::Left, words, &colors))
+                                .child(cell(&diff.left, left, change, Side::Left, words, offset, &colors))
                                 .child(div().w(px(1.)).h_full().bg(colors.divider))
                                 .child(gutter(right, change, false, &colors))
-                                .child(cell(&diff.right, right, change, Side::Right, words, &colors))
+                                .child(cell(&diff.right, right, change, Side::Right, words, offset, &colors))
                                 .into_any_element(),
                             Layout::Unified => {
                                 let (side_diff, line, side) = match right {
@@ -267,7 +292,7 @@ impl DiffView {
                                 row_el
                                     .child(gutter(left, change, is_current, &colors))
                                     .child(gutter(right, change, false, &colors))
-                                    .child(cell(side_diff, line, change, side, words, &colors))
+                                    .child(cell(side_diff, line, change, side, words, offset, &colors))
                                     .into_any_element()
                             }
                         }
@@ -440,11 +465,26 @@ impl DiffView {
                     .child(header(format!("{} {}", short(Some(self.commit)), if diff.right.exists { "" } else { "(file deleted)" }))),
             )
             .child(
-                uniform_list("diff-rows", self.rows.rows.len(), cx.processor(Self::render_rows))
-                    .track_scroll(&self.scroll)
+                div()
+                    .id("diff-scroll")
+                    .test_support()
                     .flex_1()
+                    .min_h_0()
                     .w_full()
-                    .text_size(px(13.)),
+                    .flex()
+                    // horizontal wheel/touchpad (shift+wheel arrives as horizontal)
+                    .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, cx| {
+                        let delta = event.delta.pixel_delta(px(ROW_HEIGHT));
+                        if f32::from(delta.x) != 0.0 {
+                            this.scroll_horizontally(f32::from(delta.x), cx);
+                        }
+                    }))
+                    .child(
+                        uniform_list("diff-rows", self.rows.rows.len(), cx.processor(Self::render_rows))
+                            .track_scroll(&self.scroll)
+                            .size_full()
+                            .text_size(px(13.)),
+                    ),
             )
             .into_any_element()
     }
@@ -584,6 +624,7 @@ fn cell(
     change: Option<Change>,
     side: Side,
     words: bool,
+    h_offset: f32,
     colors: &DiffColors,
 ) -> impl IntoElement {
     let base = div().flex_1().min_w_0().h_full().px_1().overflow_hidden().whitespace_nowrap().flex().items_center();
@@ -620,7 +661,17 @@ fn cell(
         None => base,
     };
     let (display, highlights) = expand_tabs(text, highlights);
-    base.child(StyledText::new(display).with_highlights(highlights))
+    base.child(div().flex_none().ml(px(-h_offset)).child(StyledText::new(display).with_highlights(highlights)))
+}
+
+/// Widest line in display columns (tabs expanded to the next stop).
+fn max_columns(text: &str) -> usize {
+    text.lines()
+        .map(|line| {
+            line.chars().fold(0, |col, c| if c == '\t' { col + TAB_WIDTH - col % TAB_WIDTH } else { col + 1 })
+        })
+        .max()
+        .unwrap_or(0)
 }
 
 /// Highlights overlapping `range`, shifted to be relative to its start.

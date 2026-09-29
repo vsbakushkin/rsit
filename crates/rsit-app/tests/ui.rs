@@ -172,7 +172,8 @@ async fn diff_view_navigates_and_folds(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path();
     git(p, &["init", "-q", "-b", "main"]);
-    let before: String = (0..40).map(|i| format!("line {i}\n")).collect();
+    let long = "x".repeat(300);
+    let before: String = (0..40).map(|i| if i == 1 { format!("{long}\n") } else { format!("line {i}\n") }).collect();
     std::fs::write(p.join("a.txt"), &before).unwrap();
     git(p, &["add", "."]);
     git(p, &["commit", "-qm", "base"]);
@@ -208,6 +209,20 @@ async fn diff_view_navigates_and_folds(cx: &mut TestAppContext) {
     cx.update_window(window, |_, window, cx| window.click(("fold", 10usize), cx)).unwrap();
     cx.run_until_parked();
     assert!(cx.update(|cx| view.read(cx).row_count()) > folded_rows, "fold expanded");
+
+    // a horizontal wheel scroll moves both sides, bounded by the widest line
+    let scroll = |cx: &mut TestAppContext, dx: f32| {
+        cx.update_window(window, |_, window, cx| {
+            window.scroll("diff-scroll", gpui_kit::ScrollDelta::Pixels(point(px(dx), px(0.))), cx)
+        })
+        .unwrap();
+    };
+    scroll(cx, -50.);
+    assert_eq!(cx.update(|cx| view.read(cx).horizontal_offset()), 50.0);
+    scroll(cx, 500.);
+    assert_eq!(cx.update(|cx| view.read(cx).horizontal_offset()), 0.0);
+    scroll(cx, -100_000.);
+    assert!(cx.update(|cx| view.read(cx).horizontal_offset()) < 300.0 * 8.0);
 
     cx.update_window(window, |_, window, cx| window.click("layout", cx)).unwrap();
     cx.run_until_parked();

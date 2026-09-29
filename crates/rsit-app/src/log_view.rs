@@ -24,7 +24,7 @@ const FILTER_DELAY: Duration = Duration::from_millis(350);
 
 actions!(
     log,
-    [SelectPrev, SelectNext, SelectPageUp, SelectPageDown, SelectFirst, SelectLast, CopyHash, FocusFilter, Refresh]
+    [SelectPrev, SelectNext, SelectPageUp, SelectPageDown, SelectFirst, SelectLast, CopyHash, FocusFilter, Refresh, ShowDiff]
 );
 
 pub fn init(cx: &mut App) {
@@ -36,6 +36,8 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("home", SelectFirst, Some(CONTEXT)),
         KeyBinding::new("end", SelectLast, Some(CONTEXT)),
         KeyBinding::new("ctrl-c", CopyHash, Some(CONTEXT)),
+        KeyBinding::new("ctrl-d", ShowDiff, Some(CONTEXT)),
+        KeyBinding::new("enter", ShowDiff, Some(CONTEXT)),
         KeyBinding::new("ctrl-f", FocusFilter, None),
         KeyBinding::new("f5", Refresh, None),
         KeyBinding::new("ctrl-r", Refresh, None),
@@ -409,6 +411,19 @@ impl LogView {
         }
     }
 
+    /// Opens the diff of the selected commit, reading its files if they are not loaded yet.
+    fn show_commit_diff(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.selected_id() else { return };
+        let files = if self.changes.is_empty() {
+            rsit_git::changed_files(&self.repo.local(), id).unwrap_or_default()
+        } else {
+            self.changes.clone()
+        };
+        if !files.is_empty() {
+            crate::diff_view::open(self.repo.clone(), id, files, 0, cx);
+        }
+    }
+
     fn open_diff(&mut self, index: usize, cx: &mut Context<Self>) {
         let Some(id) = self.selected_id() else { return };
         crate::diff_view::open(self.repo.clone(), id, self.changes.clone(), index, cx);
@@ -552,6 +567,7 @@ impl LogView {
             .on_action(cx.listener(|this, _: &SelectFirst, _, cx| this.select(0, cx)))
             .on_action(cx.listener(|this, _: &SelectLast, _, cx| this.move_selection(i64::MAX / 2, cx)))
             .on_action(cx.listener(|this, _: &CopyHash, _, cx| this.copy_hash(cx)))
+            .on_action(cx.listener(|this, _: &ShowDiff, _, cx| this.show_commit_diff(cx)))
             .size_full()
             .flex()
             .flex_col()

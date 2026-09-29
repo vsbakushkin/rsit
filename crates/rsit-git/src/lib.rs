@@ -6,6 +6,7 @@ pub mod cli;
 mod graph;
 pub mod history;
 pub mod ops;
+pub mod rebase;
 mod refs;
 
 use std::path::{Path, PathBuf};

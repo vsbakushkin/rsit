@@ -6917,6 +6917,7 @@ dependencies = [
  "anyhow",
  "gix",
  "rsit-graph",
+ "tempfile",
 ]
 
 [[package]]

@@ -1,0 +1,11 @@
+[package]
+name = "rsit-log"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+gix.workspace = true
+rsit-git.workspace = true
+rsit-graph.workspace = true

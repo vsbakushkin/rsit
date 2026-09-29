@@ -1,0 +1,12 @@
+[package]
+name = "rsit-git"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+gix.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+rsit-graph.workspace = true

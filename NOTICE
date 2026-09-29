@@ -1,0 +1,10 @@
+rsit
+Copyright 2026 rsit contributors
+
+This product contains code ported from IntelliJ Platform (intellij-community),
+Copyright 2000-2026 JetBrains s.r.o. and contributors,
+licensed under the Apache License, Version 2.0:
+  - crates/rsit-graph: port of platform/vcs-log/graph
+  - crates/rsit-graph/tests/data: test data from platform/vcs-log/graph/testData
+  - crates/rsit-git/src/refs.rs: ref ordering from plugins/git4idea (GitRefManager)
+  - crates/rsit-app/src/graph_paint.rs: port of platform/vcs-log/impl SimpleGraphCellPainter

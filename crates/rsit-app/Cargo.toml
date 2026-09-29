@@ -1,0 +1,19 @@
+[package]
+name = "rsit-app"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "rsit"
+path = "src/main.rs"
+
+[dependencies]
+gpui-kit.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+chrono.workspace = true
+gix.workspace = true
+rsit-graph.workspace = true
+rsit-git.workspace = true
+rsit-log.workspace = true

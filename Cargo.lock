@@ -6891,6 +6891,8 @@ dependencies = [
  "futures",
  "gix",
  "notify 8.2.0",
+ "rayon",
+ "regex",
  "rsit-git",
  "rsit-graph",
  "rsit-index",

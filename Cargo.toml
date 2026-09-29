@@ -12,6 +12,8 @@ gpui-kit = { version = "=0.7.0", features = ["tree-sitter-diff"] }
 gix = { version = "0.88", default-features = false, features = ["sha1", "max-performance-safe", "revision", "blob-diff", "index", "status", "mailmap"] }
 anyhow = "1"
 notify = "8"
+rayon = "1"
+regex = "1"
 futures = { version = "0.3", features = ["executor"] }
 thiserror = "2"
 clap = { version = "4", features = ["derive"] }

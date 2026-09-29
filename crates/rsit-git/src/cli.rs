@@ -32,3 +32,18 @@ pub fn run(cwd: &Path, args: &[&str]) -> Result<String> {
 pub fn show_file_diff(cwd: &Path, commit: &str, path: &str) -> Result<String> {
     run(cwd, &["show", "--format=", "--first-parent", "-M", commit, "--", path])
 }
+
+/// Checks out `rev` (a branch name or a commit for a detached HEAD).
+pub fn checkout(cwd: &Path, rev: &str) -> Result<String> {
+    run(cwd, &["checkout", rev])
+}
+
+/// Creates branch `name` at `rev`, optionally checking it out.
+pub fn create_branch(cwd: &Path, name: &str, rev: &str, checkout: bool) -> Result<String> {
+    if checkout { run(cwd, &["checkout", "-b", name, rev]) } else { run(cwd, &["branch", name, rev]) }
+}
+
+/// Creates a lightweight tag `name` at `rev`.
+pub fn create_tag(cwd: &Path, name: &str, rev: &str) -> Result<String> {
+    run(cwd, &["tag", name, rev])
+}

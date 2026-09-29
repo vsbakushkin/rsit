@@ -1,13 +1,10 @@
 //! rsit — a standalone git client modelled on IntelliJ's Git tool window.
 
-mod diff_view;
-mod graph_paint;
-mod log_view;
-
 use std::path::PathBuf;
 
 use clap::Parser;
 use gpui_kit::*;
+use rsit_app::log_view;
 
 #[derive(Parser)]
 #[command(version, about = "Git log with a commit graph, IntelliJ style")]
@@ -53,8 +50,7 @@ fn main() {
     };
 
     gpui_kit::application().run(move |cx| {
-        gpui_kit::init(cx);
-        log_view::init(cx);
+        rsit_app::init(cx);
         cx.bind_keys([KeyBinding::new("ctrl-q", Quit, None)]);
         cx.on_action(|_: &Quit, cx| cx.quit());
 

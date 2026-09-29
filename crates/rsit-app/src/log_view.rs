@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::menu::ContextMenuExt as _;
 use gpui_kit::component::resizable::{h_resizable, resizable_panel, v_resizable};
 use gpui_kit::component::{ActiveTheme as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -67,6 +68,18 @@ pub struct LogView {
 
 impl LogView {
     pub fn new(repo: Repo, filter: LogFilter, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::with_options(repo, filter, true, window, cx)
+    }
+
+    /// `watch_refs: false` skips the file system watcher (UI tests run on a
+    /// deterministic scheduler that forbids wakeups from foreign threads).
+    pub fn with_options(
+        repo: Repo,
+        filter: LogFilter,
+        watch_refs: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let input = |placeholder: &'static str, value: String, window: &mut Window, cx: &mut Context<Self>| {
             cx.new(|cx| {
                 let mut state = InputState::new(window, cx).placeholder(placeholder);
@@ -113,7 +126,9 @@ impl LogView {
             _subscriptions: subscriptions,
         };
         this.reload(true, cx);
-        this.watch_refs(cx);
+        if watch_refs {
+            this.watch_refs(cx);
+        }
         this
     }
 
@@ -286,6 +301,15 @@ impl LogView {
         self.set_filter(LogFilter::default(), cx);
     }
 
+    pub fn repo(&self) -> &Repo {
+        &self.repo
+    }
+
+    pub fn menu_target(&self) -> Option<crate::commit_menu::MenuTarget> {
+        let graph = self.graph.as_ref()?;
+        Some(self.menu_target_for(self.selected_id()?, &graph.data))
+    }
+
     // ---- selection ----
 
     fn selected_id(&self) -> Option<ObjectId> {
@@ -390,6 +414,7 @@ impl LogView {
             rows.push(
                 div()
                     .id(("row", row as usize))
+                    .test_support()
                     .h(px(ROW_HEIGHT))
                     .w_full()
                     .flex()
@@ -400,6 +425,13 @@ impl LogView {
                         window.focus(&this.focus, cx);
                         this.select(row, cx);
                     }))
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, _: &MouseDownEvent, window, cx| {
+                            window.focus(&this.focus, cx);
+                            this.select(row, cx);
+                        }),
+                    )
                     .child(
                         canvas(|_, _, _| (), move |bounds, _, window, _| graph_paint::paint_row(bounds, row_graph, window))
                             .w(px(graph_width))
@@ -462,6 +494,7 @@ impl LogView {
         };
         div()
             .id("log-table")
+            .test_support()
             .key_context(CONTEXT)
             .track_focus(&self.focus)
             .on_action(cx.listener(|this, _: &SelectPrev, _, cx| this.move_selection(-1, cx)))
@@ -490,12 +523,20 @@ impl LogView {
             .when_some(empty_message, |d, msg| {
                 d.child(div().p_4().flex().justify_center().text_color(theme.muted_foreground).child(msg))
             })
-            .child(
-                uniform_list("log", count, cx.processor(Self::render_rows))
-                    .track_scroll(&self.scroll)
+            .child({
+                let view = cx.entity().downgrade();
+                div()
                     .flex_1()
-                    .w_full(),
-            )
+                    .min_h_0()
+                    .w_full()
+                    .flex()
+                    .child(
+                        uniform_list("log", count, cx.processor(Self::render_rows))
+                            .track_scroll(&self.scroll)
+                            .size_full(),
+                    )
+                    .context_menu(move |menu, _, cx| crate::commit_menu::build(menu, view.clone(), cx))
+            })
     }
 
     fn render_toolbar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {

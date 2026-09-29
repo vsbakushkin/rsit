@@ -18,7 +18,7 @@ fn main() -> anyhow::Result<()> {
     let commits: Vec<rsit_graph::GraphCommit<u32>> = (0..data.len())
         .map(|i| rsit_graph::GraphCommit { id: i as u32, parents: data.parents(i as u32).to_vec() })
         .collect();
-    let heads: Vec<u32> = refs.tips().iter().filter_map(|t| data.index.get(t).copied()).collect();
+    let heads: Vec<u32> = refs.tips().iter().filter_map(|t| data.row_of(t)).collect();
     let graph = rsit_graph::PermanentGraph::new(&commits, heads, |a, b| a.cmp(b));
     println!("graph built in {:?} ({} nodes)", t.elapsed(), graph.len());
     let t = Instant::now();

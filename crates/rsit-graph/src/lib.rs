@@ -24,16 +24,18 @@ pub struct PermanentGraph<Id> {
     pub layout: GraphLayout,
     ids: Vec<Id>,
     not_loaded: Vec<Id>,
-    node_by_id: HashMap<Id, u32>,
+    /// Built on first [`PermanentGraph::node`] call.
+    node_by_id: std::sync::OnceLock<HashMap<Id, u32>>,
 }
 
 impl<Id: Clone + Eq + Hash> PermanentGraph<Id> {
     /// `commits` must be topologically sorted (children before parents).
     /// `head_cmp` orders branch heads by importance; more important ones are laid
     /// out to the left and own the shared history.
+    /// `branch_nodes` are nodes (indices into `commits`) of branch heads.
     pub fn new(
         commits: &[GraphCommit<Id>],
-        branch_heads: impl IntoIterator<Item = Id>,
+        branch_nodes: impl IntoIterator<Item = u32>,
         mut head_cmp: impl FnMut(&Id, &Id) -> Ordering,
     ) -> Self {
         let mut not_loaded = Vec::new();
@@ -42,10 +44,8 @@ impl<Id: Clone + Eq + Hash> PermanentGraph<Id> {
             -(not_loaded.len() as i32 + 1)
         });
         let ids: Vec<Id> = commits.iter().map(|c| c.id.clone()).collect();
-        let node_by_id: HashMap<Id, u32> = ids.iter().enumerate().map(|(i, id)| (id.clone(), i as u32)).collect();
-        let branch_nodes: Vec<u32> = branch_heads.into_iter().filter_map(|id| node_by_id.get(&id).copied()).collect();
         let layout = GraphLayout::build(&linear, branch_nodes, |a, b| head_cmp(&ids[a as usize], &ids[b as usize]));
-        Self { linear, layout, ids, not_loaded, node_by_id }
+        Self { linear, layout, ids, not_loaded, node_by_id: std::sync::OnceLock::new() }
     }
 
     pub fn len(&self) -> usize {
@@ -66,7 +66,10 @@ impl<Id: Clone + Eq + Hash> PermanentGraph<Id> {
     }
 
     pub fn node(&self, id: &Id) -> Option<u32> {
-        self.node_by_id.get(id).copied()
+        self.node_by_id
+            .get_or_init(|| self.ids.iter().enumerate().map(|(i, id)| (id.clone(), i as u32)).collect())
+            .get(id)
+            .copied()
     }
 
     pub fn parents(&self, node: u32) -> Vec<u32> {

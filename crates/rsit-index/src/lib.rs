@@ -9,7 +9,7 @@ use anyhow::{Context as _, Result, bail, ensure};
 use gix::ObjectId;
 use rsit_git::{CommitGraphData, Repo};
 
-const GRAPH_MAGIC: &[u8; 8] = b"RSITGR01";
+const GRAPH_MAGIC: &[u8; 8] = b"RSITGR02";
 
 /// Cache directory of a repository: `$XDG_CACHE_HOME/rsit/<hash of the common dir>`.
 pub fn cache_dir(repo: &Repo) -> Option<PathBuf> {
@@ -47,16 +47,17 @@ fn read_graph_file(path: &Path) -> Result<CommitGraphData> {
     let times = r.take(8 * n)?.chunks_exact(8).map(|c| i64::from_le_bytes(c.try_into().unwrap())).collect();
     let offsets: Vec<u32> = r.u32s(n + 1)?;
     let list: Vec<u32> = r.u32s(m)?;
+    let by_id: Vec<u32> = r.u32s(n)?;
     ensure!(r.pos == bytes.len(), "trailing bytes");
     ensure!(offsets.last().copied() == Some(m as u32), "bad offsets");
     ensure!(offsets.windows(2).all(|w| w[0] <= w[1]), "bad offsets");
     ensure!(list.iter().all(|&p| p == rsit_git::MISSING || (p as usize) < n), "bad parent");
-    Ok(CommitGraphData::from_parts(ids, times, offsets, list))
+    CommitGraphData::from_parts_indexed(ids, times, offsets, list, by_id).context("bad id index")
 }
 
 /// Writes the graph atomically (temp file + rename).
 pub fn write_graph(path: &Path, data: &CommitGraphData) -> Result<()> {
-    let (ids, times, offsets, list) = data.parts();
+    let (ids, times, offsets, list, by_id) = data.parts();
     if ids.iter().any(|id| id.kind() != gix::hash::Kind::Sha1) {
         bail!("only SHA-1 repositories are cached");
     }
@@ -74,7 +75,7 @@ pub fn write_graph(path: &Path, data: &CommitGraphData) -> Result<()> {
         for t in times {
             w.write_all(&t.to_le_bytes())?;
         }
-        for v in offsets.iter().chain(list) {
+        for v in offsets.iter().chain(list).chain(by_id) {
             w.write_all(&v.to_le_bytes())?;
         }
         w.flush()?;
@@ -125,7 +126,7 @@ mod tests {
         assert_eq!(back.ids, data.ids);
         assert_eq!(back.times, data.times);
         assert_eq!(back.parents(1), &[2, rsit_git::MISSING]);
-        assert_eq!(back.index[&id(3)], 2);
+        assert_eq!(back.row_of(&id(3)), Some(2));
 
         std::fs::write(&path, b"RSITGR01garbage").unwrap();
         assert!(read_graph(&path).is_none());

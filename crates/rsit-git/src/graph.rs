@@ -19,7 +19,9 @@ pub struct CommitGraphData {
     /// `parent_list[parent_offsets[i]..parent_offsets[i + 1]]` are the parents of `i`.
     parent_offsets: Vec<u32>,
     parent_list: Vec<u32>,
-    pub index: HashMap<ObjectId, u32>,
+    /// Row indices sorted by id, for [`CommitGraphData::row_of`] (much smaller than a hash map
+    /// on millions of commits).
+    by_id: Vec<u32>,
 }
 
 impl CommitGraphData {
@@ -27,12 +29,44 @@ impl CommitGraphData {
     pub fn from_parts(ids: Vec<ObjectId>, times: Vec<i64>, parent_offsets: Vec<u32>, parent_list: Vec<u32>) -> Self {
         assert_eq!(ids.len(), times.len());
         assert_eq!(parent_offsets.len(), ids.len() + 1);
-        let index = ids.iter().enumerate().map(|(i, id)| (*id, i as u32)).collect();
-        Self { ids, times, parent_offsets, parent_list, index }
+        let mut by_id: Vec<u32> = (0..ids.len() as u32).collect();
+        by_id.sort_unstable_by(|&a, &b| ids[a as usize].cmp(&ids[b as usize]));
+        Self { ids, times, parent_offsets, parent_list, by_id }
     }
 
-    pub fn parts(&self) -> (&[ObjectId], &[i64], &[u32], &[u32]) {
-        (&self.ids, &self.times, &self.parent_offsets, &self.parent_list)
+    /// Row of the commit `id`, if it is loaded.
+    pub fn row_of(&self, id: &gix::oid) -> Option<u32> {
+        self.by_id
+            .binary_search_by(|&i| self.ids[i as usize].as_ref().cmp(id))
+            .ok()
+            .map(|pos| self.by_id[pos])
+    }
+
+    pub fn contains(&self, id: &gix::oid) -> bool {
+        self.row_of(id).is_some()
+    }
+
+    /// Like [`CommitGraphData::from_parts`] with a precomputed `by_id` index
+    /// (see [`CommitGraphData::parts`]); the index is checked for consistency.
+    pub fn from_parts_indexed(
+        ids: Vec<ObjectId>,
+        times: Vec<i64>,
+        parent_offsets: Vec<u32>,
+        parent_list: Vec<u32>,
+        by_id: Vec<u32>,
+    ) -> Option<Self> {
+        let n = ids.len();
+        if times.len() != n || parent_offsets.len() != n + 1 || by_id.len() != n {
+            return None;
+        }
+        let sorted = by_id.iter().all(|&i| (i as usize) < n)
+            && by_id.windows(2).all(|w| ids[w[0] as usize] < ids[w[1] as usize]);
+        sorted.then_some(Self { ids, times, parent_offsets, parent_list, by_id })
+    }
+
+    /// Raw arrays: ids, times, parent offsets, parent list, rows sorted by id.
+    pub fn parts(&self) -> (&[ObjectId], &[i64], &[u32], &[u32], &[u32]) {
+        (&self.ids, &self.times, &self.parent_offsets, &self.parent_list, &self.by_id)
     }
 
     pub fn len(&self) -> usize {
@@ -66,23 +100,25 @@ impl Unsorted {
 /// Walks the history of `tips`. `limit` stops the walk after that many commits
 /// (used for the fast first screen). Commits in `cache` are taken from it
 /// instead of being read again; only newer history is walked.
-pub fn load_commit_graph<'a>(
-    repo: &'a gix::Repository,
+pub fn load_commit_graph(
+    repo: &gix::Repository,
     tips: &[ObjectId],
     limit: Option<usize>,
-    cache: Option<&'a CommitGraphData>,
+    cache: Option<CommitGraphData>,
 ) -> Result<CommitGraphData> {
+    let cache_owned = cache;
+    let cache = cache_owned.as_ref();
     let mut new_ids: Vec<ObjectId> = Vec::new();
     let mut new_times: Vec<i64> = Vec::new();
     let mut new_parents: Vec<Vec<ObjectId>> = Vec::new();
     let tips_to_walk: Vec<ObjectId> =
-        tips.iter().copied().filter(|t| cache.is_none_or(|c| !c.index.contains_key(t))).collect();
+        tips.iter().copied().filter(|t| cache.is_none_or(|c| !c.contains(t))).collect();
     if !tips_to_walk.is_empty() {
         let walk = repo
             .rev_walk(tips_to_walk)
             .sorting(Sorting::ByCommitTime(CommitTimeOrder::NewestFirst))
             .use_commit_graph(true)
-            .selected(move |id| cache.is_none_or(|c| !c.index.contains_key(id)))?;
+            .selected(move |id| cache.is_none_or(|c| !c.contains(id)))?;
         for info in walk {
             let info = info?;
             new_ids.push(info.id);
@@ -94,6 +130,28 @@ pub fn load_commit_graph<'a>(
         }
     }
 
+    // nothing new and every cached commit still reachable: the cache is already in display order
+    if new_ids.is_empty() {
+        if let Some(c) = cache {
+            let mut reachable = vec![false; c.len()];
+            let mut stack: Vec<u32> = tips.iter().filter_map(|t| c.row_of(t)).collect();
+            for &s in &stack {
+                reachable[s as usize] = true;
+            }
+            while let Some(i) = stack.pop() {
+                for &p in c.parents(i) {
+                    if p != MISSING && !reachable[p as usize] {
+                        reachable[p as usize] = true;
+                        stack.push(p);
+                    }
+                }
+            }
+            if reachable.iter().all(|&r| r) {
+                return Ok(cache_owned.expect("cache present"));
+            }
+        }
+    }
+
     // combined index space: new commits first, then the cached ones
     let k = new_ids.len() as u32;
     let new_pos: HashMap<ObjectId, u32> = new_ids.iter().enumerate().map(|(i, id)| (*id, i as u32)).collect();
@@ -101,7 +159,7 @@ pub fn load_commit_graph<'a>(
         new_pos
             .get(id)
             .copied()
-            .or_else(|| cache.and_then(|c| c.index.get(id)).map(|&i| i + k))
+            .or_else(|| cache.and_then(|c| c.row_of(id)).map(|i| i + k))
             .unwrap_or(MISSING)
     };
     let cached_len = cache.map_or(0, |c| c.len());

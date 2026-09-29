@@ -39,10 +39,11 @@ impl LogData {
         let cache = cache_path.as_deref().and_then(rsit_index::read_graph);
         // with a cache the whole history is cheap, no need for a first screen
         let limit = if cache.is_some() { None } else { limit };
-        let commits = rsit_git::load_commit_graph(&local, &refs.tips(), limit, cache.as_ref())?;
+        let cached_ids_hash = cache.as_ref().map(|c| ids_fingerprint(&c.ids));
+        let commits = rsit_git::load_commit_graph(&local, &refs.tips(), limit, cache)?;
         let partial = limit.is_some_and(|l| commits.len() >= l);
         if let Some(path) = cache_path.filter(|_| !partial) {
-            if cache.is_none_or(|c| c.ids != commits.ids) {
+            if cached_ids_hash != Some(ids_fingerprint(&commits.ids)) {
                 if let Err(e) = rsit_index::write_graph(&path, &commits) {
                     eprintln!("rsit: cannot write graph cache {}: {e:#}", path.display());
                 }
@@ -54,7 +55,7 @@ impl LogData {
     pub fn from_parts(repo: Repo, refs: Refs, commits: CommitGraphData, partial: bool) -> Self {
         let mut refs_by_row: HashMap<u32, Vec<Ref>> = HashMap::new();
         for r in &refs.refs {
-            if let Some(&row) = commits.index.get(&r.target) {
+            if let Some(row) = commits.row_of(&r.target) {
                 refs_by_row.entry(row).or_default().push(r.clone());
             }
         }
@@ -88,7 +89,7 @@ impl LogData {
             .refs
             .iter()
             .filter(|r| r.kind != RefKind::Tag)
-            .filter_map(|r| commits.index.get(&r.target).copied())
+            .filter_map(|r| commits.row_of(&r.target))
             .collect();
         let best_ref = |row: u32| -> Option<&Ref> {
             refs_by_row.get(&row)?.iter().min_by(|a, b| refs.layout_cmp(a, b))
@@ -126,7 +127,7 @@ impl LogData {
     }
 
     pub fn row_of(&self, id: &ObjectId) -> Option<u32> {
-        self.commits.index.get(id).copied()
+        self.commits.row_of(id)
     }
 
     pub fn refs_at(&self, row: u32) -> &[Ref] {
@@ -279,4 +280,13 @@ impl MetaCache {
     pub fn repo(&self) -> &gix::Repository {
         &self.repo
     }
+}
+
+/// Cheap identity of a commit list, to tell whether the cache needs rewriting.
+fn ids_fingerprint(ids: &[ObjectId]) -> (usize, u64) {
+    let hash = ids.iter().fold(0xcbf29ce484222325u64, |h, id| {
+        let word = u64::from_le_bytes(id.as_bytes()[..8].try_into().unwrap());
+        (h ^ word).wrapping_mul(0x100000001b3)
+    });
+    (ids.len(), hash)
 }

@@ -185,14 +185,19 @@ async fn diff_view_navigates_and_folds(cx: &mut TestAppContext) {
     let repo = rsit_git::Repo::discover(p).unwrap();
     let local = repo.local();
     let commit = local.rev_parse_single("HEAD").unwrap().detach();
-    let files = rsit_git::changed_files(&local, commit).unwrap();
+    let parent = rsit_git::first_parent(&local, commit).unwrap();
+    let files: Vec<rsit_app::diff_model::DiffItem> = rsit_git::changed_files(&local, commit)
+        .unwrap()
+        .into_iter()
+        .map(|f| rsit_app::diff_model::DiffItem::for_commit(f, parent, commit))
+        .collect();
     let (window, view) = cx.update(|cx| {
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds { origin: point(px(0.), px(0.)), size: size(px(1200.), px(800.)) })),
             ..Default::default()
         };
         gpui_kit::open_window(options, cx, |window, cx| {
-            cx.new(|cx| rsit_app::diff_view::DiffView::new(repo, commit, files, 0, window, cx))
+            cx.new(|cx| rsit_app::diff_view::DiffView::new(repo, files, 0, window, cx))
         })
         .unwrap()
     });
@@ -228,4 +233,98 @@ async fn diff_view_navigates_and_folds(cx: &mut TestAppContext) {
     cx.run_until_parked();
     // unified: each modified line shows as a deletion plus an insertion
     assert!(cx.update(|cx| view.read(cx).row_count()) > folded_rows + 2);
+}
+
+#[gpui_kit::test]
+async fn commit_panel_stages_and_commits(cx: &mut TestAppContext) {
+    isolate_cache();
+    let repo_dir = demo_repo();
+    let p = repo_dir.path();
+    git(p, &["config", "user.name", "Test"]);
+    git(p, &["config", "user.email", "test@example.com"]);
+    std::fs::write(p.join("new.txt"), "hello\n").unwrap();
+    std::fs::write(p.join("f1"), "changed\n").unwrap();
+
+    cx.update(rsit_app::init);
+    let repo = rsit_git::Repo::discover(p).unwrap();
+    let (window, panel) = cx.update(|cx| {
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(Bounds { origin: point(px(0.), px(0.)), size: size(px(500.), px(800.)) })),
+            ..Default::default()
+        };
+        gpui_kit::open_window(options, cx, |window, cx| {
+            cx.new(|cx| rsit_app::commit_panel::CommitPanel::new(repo, false, window, cx))
+        })
+        .unwrap()
+    });
+    let window: gpui_kit::AnyWindowHandle = window;
+    cx.run_until_parked();
+    let counts = |cx: &mut TestAppContext| {
+        cx.update(|cx| {
+            let s = panel.read(cx).status().clone();
+            (s.staged().count(), s.unstaged().count(), s.untracked().count())
+        })
+    };
+    assert_eq!(counts(cx), (0, 1, 1));
+
+    // "+" on the unversioned file stages it
+    cx.update_window(window, |_, window, cx| window.click("act-unversioned:new.txt", cx)).unwrap();
+    cx.run_until_parked();
+    assert_eq!(counts(cx), (1, 1, 0));
+
+    // type a message and commit with Ctrl+Enter
+    cx.update_window(window, |_, window, cx| {
+        window.click("commit-message", cx);
+        window.input("Add new.txt", cx);
+        window.press("ctrl-enter", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(git(p, &["log", "-1", "--format=%s"]).trim(), "Add new.txt");
+    assert_eq!(git(p, &["show", "--name-only", "--format="]).trim(), "new.txt", "only the staged file");
+    assert_eq!(counts(cx), (0, 1, 0), "f1 stays modified");
+}
+
+#[gpui_kit::test]
+async fn diff_stages_a_single_change(cx: &mut TestAppContext) {
+    isolate_cache();
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path();
+    git(p, &["init", "-q", "-b", "main"]);
+    let base: String = (1..=30).map(|i| format!("line {i}\n")).collect();
+    std::fs::write(p.join("a.txt"), &base).unwrap();
+    git(p, &["add", "."]);
+    git(p, &["commit", "-qm", "base"]);
+    std::fs::write(p.join("a.txt"), base.replace("line 2\n", "line two\n").replace("line 25\n", "line 25!\n")).unwrap();
+
+    cx.update(rsit_app::init);
+    let repo = rsit_git::Repo::discover(p).unwrap();
+    let item = rsit_app::diff_model::DiffItem {
+        change: rsit_git::FileChange { kind: rsit_git::ChangeKind::Modified, path: "a.txt".into(), old_path: None },
+        left: Some(rsit_git::Revision::Index),
+        right: Some(rsit_git::Revision::WorkTree),
+        left_label: "Staged".into(),
+        right_label: "Local".into(),
+        action: Some(rsit_app::diff_model::ChangeAction::Stage),
+    };
+    let (window, view) = cx.update(|cx| {
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(Bounds { origin: point(px(0.), px(0.)), size: size(px(1200.), px(800.)) })),
+            ..Default::default()
+        };
+        gpui_kit::open_window(options, cx, |window, cx| {
+            cx.new(|cx| rsit_app::diff_view::DiffView::new(repo, vec![item], 0, window, cx))
+        })
+        .unwrap()
+    });
+    let window: gpui_kit::AnyWindowHandle = window;
+    cx.run_until_parked();
+    assert_eq!(cx.update(|cx| view.read(cx).change_position()).1, 2);
+
+    // "+" next to the second change
+    cx.update_window(window, |_, window, cx| window.click(("change-action", 1usize), cx)).unwrap();
+    cx.run_until_parked();
+    let staged = git(p, &["diff", "--cached", "-U0"]);
+    assert!(staged.contains("+line 25!") && !staged.contains("two"), "{staged}");
+    assert_eq!(cx.update(|cx| view.read(cx).change_position()).1, 1, "the diff reloads without the staged change");
 }

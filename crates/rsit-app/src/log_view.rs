@@ -141,7 +141,7 @@ impl LogView {
 
     /// Refreshes the log when refs change on disk (commit, fetch, checkout…).
     fn watch_refs(&mut self, cx: &mut Context<Self>) {
-        let (watcher, mut events) = match rsit_log::watch::watch_refs(&self.repo) {
+        let (watcher, mut events) = match rsit_log::watch::watch_repo(&self.repo) {
             Ok(w) => w,
             Err(e) => {
                 eprintln!("rsit: cannot watch refs: {e:#}");
@@ -150,7 +150,10 @@ impl LogView {
         };
         let task = cx.spawn(async move |this, cx| {
             use futures::StreamExt as _;
-            while events.next().await.is_some() {
+            while let Some(event) = events.next().await {
+                if event != rsit_log::watch::RepoEvent::Refs {
+                    continue;
+                }
                 // git writes several files per operation; wait for it to settle
                 cx.background_executor().timer(Duration::from_millis(300)).await;
                 while events.try_recv().is_ok() {}
@@ -504,12 +507,12 @@ impl LogView {
                     .child(
                         div()
                             .flex_1()
-                            .min_w_0()
+                            .min_w(px(160.))
                             .flex()
                             .items_center()
                             .gap_1()
                             .overflow_hidden()
-                            .child(div().flex_shrink(1.).min_w(px(120.)).truncate().child(subject))
+                            .child(div().flex_shrink(1.).min_w(px(60.)).truncate().child(subject))
                             .child(
                                 div()
                                     .flex()
@@ -520,8 +523,8 @@ impl LogView {
                                     .children(data.refs_at(permanent).iter().take(4).map(ref_label)),
                             ),
                     )
-                    .child(div().w(px(160.)).flex_none().px_2().truncate().text_color(muted).child(author))
-                    .child(div().w(px(130.)).flex_none().px_2().truncate().text_color(muted).child(date))
+                    .child(div().w(px(160.)).flex_shrink(1.).min_w(px(40.)).px_2().truncate().text_color(muted).child(author))
+                    .child(div().w(px(130.)).flex_shrink(1.).min_w(px(40.)).px_2().truncate().text_color(muted).child(date))
                     .child(
                         div()
                             .w(px(90.))
@@ -545,8 +548,10 @@ impl LogView {
         let header = |label: &'static str, w: Option<f32>| {
             let d = div().px_2().truncate().child(label);
             match w {
-                Some(w) => d.w(px(w)).flex_none(),
-                None => d.flex_1(),
+                // the hash keeps its width; author and date give way to the subject
+                Some(w) if label == "Hash" => d.w(px(w)).flex_none(),
+                Some(w) => d.w(px(w)).flex_shrink(1.).min_w(px(40.)),
+                None => d.flex_1().min_w(px(160.)),
             }
         };
         let empty_message = match &self.graph {

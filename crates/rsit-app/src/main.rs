@@ -4,7 +4,6 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use gpui_kit::*;
-use rsit_app::log_view;
 
 #[derive(Parser)]
 #[command(version, about = "Git log with a commit graph, IntelliJ style")]
@@ -60,7 +59,7 @@ fn main() {
         }
     };
 
-    gpui_kit::application().run(move |cx| {
+    gpui_kit::application().with_assets(gpui_kit::assets::Assets).run(move |cx| {
         rsit_app::init(cx);
         if let Some((commit, files)) = diff {
             cx.bind_keys([KeyBinding::new("ctrl-q", Quit, None)]);
@@ -92,7 +91,9 @@ fn main() {
             ..Default::default()
         };
         let (main_window, _) =
-            gpui_kit::open_window(options, cx, |window, cx| cx.new(|cx| log_view::LogView::new(repo, filter, window, cx)))
+            gpui_kit::open_window(options, cx, |window, cx| {
+                cx.new(|cx| rsit_app::workspace::Workspace::new(repo, filter, true, window, cx))
+            })
                 .expect("failed to open window");
         // closing the log window quits, diff windows are secondary
         cx.on_window_closed(move |cx, closed| {

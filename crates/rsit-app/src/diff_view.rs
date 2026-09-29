@@ -8,13 +8,13 @@ use std::sync::Arc;
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::resizable::{h_resizable, resizable_panel};
-use gpui_kit::component::{ActiveTheme as _, Sizable as _};
+use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use rsit_diff::{Change, ChangeKind, DiffRows, Folding, Layout, Row, WhitespacePolicy};
 use rsit_git::{FileChange, ObjectId, Repo};
 
-use crate::diff_model::{DiffSide, FileDiff};
+use crate::diff_model::{ChangeAction, DiffItem, DiffSide, FileDiff};
 
 const CONTEXT: &str = "DiffView";
 const ROW_HEIGHT: f32 = 20.0;
@@ -25,7 +25,7 @@ const TAB_WIDTH: usize = 4;
 /// bound horizontal scrolling.
 const CHAR_WIDTH: f32 = 8.0;
 
-actions!(diff, [NextChange, PrevChange, NextFile, PrevFile, CloseDiff]);
+actions!(diff, [NextChange, PrevChange, NextFile, PrevFile, CloseDiff, ApplyChangeAction]);
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
@@ -34,6 +34,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("alt-down", NextFile, Some(CONTEXT)),
         KeyBinding::new("alt-up", PrevFile, Some(CONTEXT)),
         KeyBinding::new("escape", CloseDiff, Some(CONTEXT)),
+        KeyBinding::new("ctrl-alt-a", ApplyChangeAction, Some(CONTEXT)),
     ]);
 }
 
@@ -47,9 +48,7 @@ struct Settings {
 
 pub struct DiffView {
     repo: Repo,
-    commit: ObjectId,
-    parent: Option<ObjectId>,
-    files: Vec<FileChange>,
+    files: Vec<DiffItem>,
     selected: usize,
     settings: Settings,
     diff: Option<Arc<FileDiff>>,
@@ -66,9 +65,16 @@ pub struct DiffView {
     _load: Option<Task<()>>,
 }
 
-/// Opens a diff window for `files` of `commit`, starting at `selected`.
+/// Opens a diff window for `files` of `commit` (against its first parent), starting at `selected`.
 pub fn open(repo: Repo, commit: ObjectId, files: Vec<FileChange>, selected: usize, cx: &mut App) {
-    let title: SharedString = format!("Changes in {}", commit.to_hex_with_len(8)).into();
+    let parent = rsit_git::first_parent(&repo.local(), commit).ok().flatten();
+    let items = files.into_iter().map(|f| DiffItem::for_commit(f, parent, commit)).collect();
+    open_items(repo, format!("Changes in {}", commit.to_hex_with_len(8)), items, selected, cx);
+}
+
+/// Opens a diff window over arbitrary items (e.g. local changes).
+pub fn open_items(repo: Repo, title: String, items: Vec<DiffItem>, selected: usize, cx: &mut App) {
+    let title: SharedString = title.into();
     let options = WindowOptions {
         titlebar: Some(TitlebarOptions { title: Some(title), ..Default::default() }),
         window_bounds: Some(WindowBounds::centered(size(px(1500.), px(900.)), cx)),
@@ -76,7 +82,7 @@ pub fn open(repo: Repo, commit: ObjectId, files: Vec<FileChange>, selected: usiz
         ..Default::default()
     };
     let result = gpui_kit::open_window(options, cx, |window, cx| {
-        cx.new(|cx| DiffView::new(repo, commit, files, selected, window, cx))
+        cx.new(|cx| DiffView::new(repo, items, selected, window, cx))
     });
     if let Err(e) = result {
         eprintln!("rsit: cannot open diff window: {e:#}");
@@ -84,21 +90,11 @@ pub fn open(repo: Repo, commit: ObjectId, files: Vec<FileChange>, selected: usiz
 }
 
 impl DiffView {
-    pub fn new(
-        repo: Repo,
-        commit: ObjectId,
-        files: Vec<FileChange>,
-        selected: usize,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        let parent = rsit_git::first_parent(&repo.local(), commit).ok().flatten();
+    pub fn new(repo: Repo, files: Vec<DiffItem>, selected: usize, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         let mut this = Self {
             repo,
-            commit,
-            parent,
             files,
             selected: 0,
             settings: Settings {
@@ -123,29 +119,48 @@ impl DiffView {
     }
 
     fn select_file(&mut self, index: usize, cx: &mut Context<Self>) {
-        let Some(change) = self.files.get(index).cloned() else { return };
+        if index >= self.files.len() {
+            return;
+        }
         self.selected = index;
-        self.diff = None;
+        self.load_selected(cx);
+    }
+
+    /// Loads the selected file. With `keep_position` (after staging a change) the
+    /// old diff stays visible until the new one is ready and the position is kept.
+    fn load_selected(&mut self, cx: &mut Context<Self>) {
+        self.load(false, cx)
+    }
+
+    fn load(&mut self, keep_position: bool, cx: &mut Context<Self>) {
+        let Some(item) = self.files.get(self.selected).cloned() else { return };
+        if !keep_position {
+            self.diff = None;
+            self.expanded.clear();
+            self.current_change = None;
+            self.rows = DiffRows { rows: Vec::new(), change_starts: Vec::new() };
+        }
         self.error = None;
-        self.expanded.clear();
-        self.current_change = None;
-        self.rows = DiffRows { rows: Vec::new(), change_starts: Vec::new() };
-        let (repo, parent, commit, policy) = (self.repo.clone(), self.parent, self.commit, self.settings.policy);
+        let (repo, policy) = (self.repo.clone(), self.settings.policy);
         let theme = cx.theme().highlight_theme.clone();
         self._load = Some(cx.spawn(async move |this, cx| {
-            let diff = cx
-                .background_spawn(async move { FileDiff::load(&repo, parent, commit, &change, policy, &theme) })
-                .await;
+            let diff = cx.background_spawn(async move { FileDiff::load(&repo, &item, policy, &theme) }).await;
             this.update(cx, |this, cx| {
                 match diff {
                     Ok(diff) => {
                         this.max_columns = max_columns(&diff.left.text).max(max_columns(&diff.right.text));
-                        this.h_offset = 0.0;
                         this.diff = Some(Arc::new(diff));
+                        if !keep_position {
+                            this.h_offset = 0.0;
+                        }
+                        this.expanded.clear();
                         this.rebuild_rows();
-                        // open at the first change, like IntelliJ
-                        if !this.rows.change_starts.is_empty() {
-                            this.go_to_change(0);
+                        let count = this.rows.change_starts.len();
+                        match (keep_position, this.current_change) {
+                            (_, _) if count == 0 => this.current_change = None,
+                            (true, Some(i)) => this.go_to_change(i.min(count - 1)),
+                            // open at the first change, like IntelliJ
+                            _ => this.go_to_change(0),
                         }
                     }
                     Err(e) => this.error = Some(format!("{e:#}").into()),
@@ -155,6 +170,47 @@ impl DiffView {
             .ok();
         }));
         cx.notify();
+    }
+
+    /// The action available for changes of the selected file, if any.
+    fn action(&self) -> Option<ChangeAction> {
+        self.files.get(self.selected)?.action
+    }
+
+    /// Stages or unstages one change (IntelliJ "Stage/Unstage Selected Changes").
+    fn apply_action(&mut self, fragment: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(action), Some(diff), Some(item)) = (self.action(), self.diff.clone(), self.files.get(self.selected)) else {
+            return;
+        };
+        let Some(f) = diff.fragments.get(fragment) else { return };
+        let patch = rsit_diff::fragment_patch(&item.change.path, &diff.left.text, &diff.right.text, f);
+        let cwd = self.repo.cwd().to_path_buf();
+        self.current_change = Some(fragment);
+        cx.spawn_in(window, async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    rsit_git::changes::apply_to_index(&cwd, &patch, action == ChangeAction::Unstage)
+                })
+                .await;
+            this.update_in(cx, |this, window, cx| match result {
+                Ok(()) => this.load(true, cx),
+                Err(e) => {
+                    use gpui_kit::component::WindowExt as _;
+                    window.push_notification(
+                        gpui_kit::component::notification::Notification::error(format!("{e:#}")).autohide(false),
+                        cx,
+                    );
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn apply_action_to_current(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(i) = self.current_change {
+            self.apply_action(i, window, cx);
+        }
     }
 
     fn rebuild_rows(&mut self) {
@@ -250,6 +306,7 @@ impl DiffView {
         let current = self.current_change;
         let mono = cx.theme().mono_font_family.clone();
         let offset = self.h_offset;
+        let action = self.action();
         range
             .map(|ix| {
                 let row = self.rows.rows[ix].clone();
@@ -274,10 +331,36 @@ impl DiffView {
                     }
                     Row::Line { left, right, change } => {
                         let is_current = change.is_some_and(|c| Some(c.fragment) == current);
+                        let marker = match (action, change) {
+                            (Some(action), Some(c)) if self.rows.change_starts.binary_search(&ix).is_ok() => {
+                                let fragment = c.fragment;
+                                Some(
+                                    div()
+                                        .id(("change-action", fragment))
+                                        .test_support()
+                                        .w(px(14.))
+                                        .flex_none()
+                                        .h_full()
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .text_color(colors.current)
+                                        .cursor_pointer()
+                                        .child(if action == ChangeAction::Stage { "+" } else { "−" })
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.apply_action(fragment, window, cx)
+                                        }))
+                                        .into_any_element(),
+                                )
+                            }
+                            (Some(_), _) => Some(div().w(px(14.)).flex_none().into_any_element()),
+                            _ => None,
+                        };
                         let row_el =
                             div().id(("line", ix)).h(px(ROW_HEIGHT)).w_full().flex().font_family(mono.clone());
                         match self.settings.layout {
                             Layout::SideBySide => row_el
+                                .children(marker)
                                 .child(gutter(left, change, is_current, &colors))
                                 .child(cell(&diff.left, left, change, Side::Left, words, offset, &colors))
                                 .child(div().w(px(1.)).h_full().bg(colors.divider))
@@ -290,6 +373,7 @@ impl DiffView {
                                     _ => (&diff.left, left, Side::Left),
                                 };
                                 row_el
+                                    .children(marker)
                                     .child(gutter(left, change, is_current, &colors))
                                     .child(gutter(right, change, false, &colors))
                                     .child(cell(side_diff, line, change, side, words, offset, &colors))
@@ -317,9 +401,9 @@ impl DiffView {
             WhitespacePolicy::TrimWhitespaces => "Trim whitespace",
             WhitespacePolicy::IgnoreWhitespaces => "Ignore whitespace",
         };
-        let path = self.files.get(self.selected).map(|f| match &f.old_path {
-            Some(old) => format!("{old} → {}", f.path),
-            None => f.path.clone(),
+        let path = self.files.get(self.selected).map(|item| match &item.change.old_path {
+            Some(old) => format!("{old} → {}", item.change.path),
+            None => item.change.path.clone(),
         });
         div()
             .flex()
@@ -333,7 +417,7 @@ impl DiffView {
                 Button::new("prev-change")
                     .small()
                     .ghost()
-                    .label("↑")
+                    .icon(gpui_kit::assets::IconName::ArrowUp)
                     .tooltip("Previous Difference (Shift+F7)")
                     .on_click(cx.listener(|this, _, _, cx| this.next_change(-1, cx))),
             )
@@ -341,11 +425,24 @@ impl DiffView {
                 Button::new("next-change")
                     .small()
                     .ghost()
-                    .label("↓")
+                    .icon(gpui_kit::assets::IconName::ArrowDown)
                     .tooltip("Next Difference (F7)")
                     .on_click(cx.listener(|this, _, _, cx| this.next_change(1, cx))),
             )
             .child(div().w(px(150.)).text_color(muted).child(position))
+            .children(self.action().map(|action| {
+                let label = match action {
+                    ChangeAction::Stage => "Stage Change",
+                    ChangeAction::Unstage => "Unstage Change",
+                };
+                Button::new("change-action")
+                    .small()
+                    .outline()
+                    .label(label)
+                    .tooltip("Ctrl+Alt+A")
+                    .disabled(self.current_change.is_none())
+                    .on_click(cx.listener(|this, _, window, cx| this.apply_action_to_current(window, cx)))
+            }))
             .child(
                 Button::new("layout")
                     .small()
@@ -403,7 +500,8 @@ impl DiffView {
     fn render_files(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let (active, hover, muted) = (theme.list_active, theme.list_hover, theme.muted_foreground);
-        let items = self.files.iter().enumerate().map(|(i, f)| {
+        let items = self.files.iter().enumerate().map(|(i, item)| {
+            let f = &item.change;
             let (letter, color) = crate::log_view::change_style(f.kind);
             let (dir, name) = match f.path.rsplit_once('/') {
                 Some((d, n)) => (d.to_string(), n.to_string()),
@@ -438,6 +536,11 @@ impl DiffView {
             return message(error.clone());
         }
         let Some(diff) = &self.diff else { return message("Loading…".into()) };
+        let labels = self
+            .files
+            .get(self.selected)
+            .map(|item| (item.left_label.clone(), item.right_label.clone()))
+            .unwrap_or_default();
         if diff.binary {
             return message("Binary file has changed".into());
         }
@@ -448,7 +551,6 @@ impl DiffView {
             });
         }
         let header = |label: String| div().flex_1().px_2().truncate().text_color(muted).child(label);
-        let short = |id: Option<ObjectId>| id.map(|i| i.to_hex_with_len(8).to_string()).unwrap_or_else(|| "(none)".into());
         let theme = cx.theme();
         div()
             .size_full()
@@ -461,8 +563,8 @@ impl DiffView {
                     .items_center()
                     .border_b_1()
                     .border_color(theme.border)
-                    .child(header(format!("{} {}", short(self.parent), if diff.left.exists { "" } else { "(file absent)" })))
-                    .child(header(format!("{} {}", short(Some(self.commit)), if diff.right.exists { "" } else { "(file deleted)" }))),
+                    .child(header(format!("{} {}", labels.0, if diff.left.exists { "" } else { "(file absent)" })))
+                    .child(header(format!("{} {}", labels.1, if diff.right.exists { "" } else { "(file deleted)" }))),
             )
             .child(
                 div()
@@ -512,6 +614,7 @@ impl Render for DiffView {
                 }
             }))
             .on_action(|_: &CloseDiff, window, _| window.remove_window())
+            .on_action(cx.listener(|this, _: &ApplyChangeAction, window, cx| this.apply_action_to_current(window, cx)))
             .size_full()
             .flex()
             .flex_col()

@@ -9,7 +9,8 @@ use gpui_kit::HighlightStyle;
 use gpui_kit::component::highlighter::{HighlightTheme, Language, SyntaxHighlighter};
 use gpui_kit::component::input::Rope;
 use rsit_diff::{LineFragment, Lines, WhitespacePolicy};
-use rsit_git::{ChangeKind, FileChange, ObjectId, Repo};
+use gpui_kit::SharedString;
+use rsit_git::{ChangeKind, FileChange, ObjectId, Repo, Revision};
 
 /// Files larger than this are compared but not syntax highlighted.
 const MAX_HIGHLIGHT_BYTES: usize = 2 * 1024 * 1024;
@@ -64,27 +65,20 @@ pub struct FileDiff {
 }
 
 impl FileDiff {
-    /// Reads both versions of `change` (parent vs `commit`) and compares them.
-    pub fn load(
-        repo: &Repo,
-        parent: Option<ObjectId>,
-        commit: ObjectId,
-        change: &FileChange,
-        policy: WhitespacePolicy,
-        theme: &HighlightTheme,
-    ) -> Result<Self> {
-        let local = repo.local();
-        let left_path = change.old_path.as_deref().unwrap_or(&change.path);
-        let left = match (parent, change.kind) {
-            (Some(parent), kind) if kind != ChangeKind::Added => rsit_git::file_at(&local, parent, left_path)?,
-            _ => None,
+    /// Reads both sides of `item` and compares them.
+    pub fn load(repo: &Repo, item: &DiffItem, policy: WhitespacePolicy, theme: &HighlightTheme) -> Result<Self> {
+        let left_path = item.change.old_path.as_deref().unwrap_or(&item.change.path);
+        let read = |rev: Option<Revision>, path: &str| -> Result<Option<Vec<u8>>> {
+            match rev {
+                Some(rev) => rsit_git::file_at_revision(repo, rev, path),
+                None => Ok(None),
+            }
         };
-        let right = match change.kind {
-            ChangeKind::Deleted => None,
-            _ => rsit_git::file_at(&local, commit, &change.path)?,
-        };
+        let left = read(item.left, left_path)?;
+        let right = read(item.right, &item.change.path)?;
         let binary = [&left, &right].iter().any(|b| b.as_ref().is_some_and(|b| is_binary(b)));
-        let language = if binary { "text" } else { language_for(&change.path) };
+        let language = if binary { "text" } else { language_for(&item.change.path) };
+        let (left_exists, right_exists) = (left.is_some(), right.is_some());
         let mut diff = Self {
             left: DiffSide::new(if binary { None } else { left }, language, theme),
             right: DiffSide::new(if binary { None } else { right }, language, theme),
@@ -92,8 +86,8 @@ impl FileDiff {
             binary,
             language,
         };
-        diff.left.exists |= change.kind != ChangeKind::Added && !binary;
-        diff.right.exists |= change.kind != ChangeKind::Deleted && !binary;
+        diff.left.exists = left_exists;
+        diff.right.exists = right_exists;
         diff.recompare(policy);
         Ok(diff)
     }
@@ -123,6 +117,42 @@ impl FileDiff {
 }
 
 pub type SharedDiff = Arc<FileDiff>;
+
+/// What a single change of a diff can be sent to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChangeAction {
+    /// Left is the index, right the working tree: move a change into the index.
+    Stage,
+    /// Left is HEAD, right the index: take a change out of the index.
+    Unstage,
+}
+
+/// One file of a diff window: which revisions to compare and how to label them.
+#[derive(Clone, Debug)]
+pub struct DiffItem {
+    pub change: FileChange,
+    /// `None` shows an absent file (added/deleted).
+    pub left: Option<Revision>,
+    pub right: Option<Revision>,
+    pub left_label: SharedString,
+    pub right_label: SharedString,
+    pub action: Option<ChangeAction>,
+}
+
+impl DiffItem {
+    /// `change` in `commit` against its first parent.
+    pub fn for_commit(change: FileChange, parent: Option<ObjectId>, commit: ObjectId) -> Self {
+        let short = |id: ObjectId| SharedString::from(id.to_hex_with_len(8).to_string());
+        Self {
+            left: parent.filter(|_| change.kind != ChangeKind::Added).map(Revision::Commit),
+            right: (change.kind != ChangeKind::Deleted).then_some(Revision::Commit(commit)),
+            left_label: parent.map(short).unwrap_or_else(|| "(no parent)".into()),
+            right_label: short(commit),
+            action: None,
+            change,
+        }
+    }
+}
 
 fn is_binary(bytes: &[u8]) -> bool {
     bytes[..bytes.len().min(8000)].contains(&0)

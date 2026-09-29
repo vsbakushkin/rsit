@@ -53,6 +53,8 @@ impl Status {
 
 pub fn status(cwd: &Path) -> Result<Status> {
     let out = git(cwd)
+        // do not let status refresh the index: that would wake our own index watcher
+        .env("GIT_OPTIONAL_LOCKS", "0")
         .args(["status", "--porcelain=v2", "-z", "--untracked-files=all", "--branch"])
         .output()
         .context("cannot run git status")?;

@@ -1,4 +1,5 @@
-//! Notices ref changes (commits, fetches, checkouts) to refresh the log.
+//! Notices repository changes: refs (commits, fetches, checkouts) refresh the
+//! log, the index (staging) refreshes local changes.
 
 use std::path::Path;
 
@@ -12,22 +13,34 @@ pub struct RefsWatcher {
     _watcher: RecommendedWatcher,
 }
 
-/// Sends `()` whenever HEAD, packed-refs or anything under `refs/` changes.
-pub fn watch_refs(repo: &Repo) -> Result<(RefsWatcher, UnboundedReceiver<()>)> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RepoEvent {
+    /// HEAD, packed-refs or something under `refs/`.
+    Refs,
+    /// The index (`.git/index`).
+    Index,
+}
+
+/// Sends an event whenever refs or the index change.
+pub fn watch_repo(repo: &Repo) -> Result<(RefsWatcher, UnboundedReceiver<RepoEvent>)> {
     let (tx, rx) = unbounded();
     let absolute = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
     let git_dir = absolute(repo.git_dir());
     let common_dir = absolute(repo.common_dir());
     let refs_dir = common_dir.join("refs");
-    let relevant = {
+    let classify = {
         let (git_dir, common_dir, refs_dir) = (git_dir.clone(), common_dir.clone(), refs_dir.clone());
-        move |path: &Path| {
+        move |path: &Path| -> Option<RepoEvent> {
             if path.extension().is_some_and(|e| e == "lock") {
-                return false;
+                return None;
             }
-            path.starts_with(&refs_dir)
-                || path == git_dir.join("HEAD")
-                || path == common_dir.join("packed-refs")
+            if path.starts_with(&refs_dir) || path == git_dir.join("HEAD") || path == common_dir.join("packed-refs") {
+                Some(RepoEvent::Refs)
+            } else if path == git_dir.join("index") {
+                Some(RepoEvent::Index)
+            } else {
+                None
+            }
         }
     };
     let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
@@ -35,8 +48,11 @@ pub fn watch_refs(repo: &Repo) -> Result<(RefsWatcher, UnboundedReceiver<()>)> {
         if event.kind.is_access() {
             return;
         }
-        if event.paths.iter().any(|p| relevant(p)) {
-            tx.unbounded_send(()).ok();
+        let mut sent = [false; 2];
+        for kind in event.paths.iter().filter_map(|p| classify(p)) {
+            if !std::mem::replace(&mut sent[kind as usize], true) {
+                tx.unbounded_send(kind).ok();
+            }
         }
     })?;
     watcher.watch(&git_dir, RecursiveMode::NonRecursive)?;

@@ -15,19 +15,22 @@ use rsit_git::Repo;
 use rsit_git::conflicts::{self, ConflictVersions};
 
 use crate::diff_model::{DiffSide, language_for};
-use crate::text::{clip, expand_tabs};
+use crate::selection::{SelectableText, SelectionState};
+use crate::text::clip;
 
 const CONTEXT: &str = "MergeView";
 const ROW_HEIGHT: f32 = 20.0;
 const GUTTER: f32 = 44.0;
 const CONTROLS: f32 = 44.0;
 
-actions!(merge, [NextConflict, PrevConflict]);
+actions!(merge, [NextConflict, PrevConflict, CopyMergeText, SelectAllMergeText]);
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("f7", NextConflict, Some(CONTEXT)),
         KeyBinding::new("shift-f7", PrevConflict, Some(CONTEXT)),
+        KeyBinding::new("ctrl-c", CopyMergeText, Some(CONTEXT)),
+        KeyBinding::new("ctrl-a", SelectAllMergeText, Some(CONTEXT)),
     ]);
 }
 
@@ -59,6 +62,7 @@ pub struct MergeView {
     error: Option<SharedString>,
     scroll: UniformListScrollHandle,
     focus: FocusHandle,
+    selection: SelectionState,
     _load: Option<Task<()>>,
 }
 
@@ -96,6 +100,7 @@ impl MergeView {
             error: None,
             scroll: UniformListScrollHandle::new(),
             focus,
+            selection: SelectionState::default(),
             _load: None,
         };
         this.load(cx);
@@ -159,6 +164,10 @@ impl MergeView {
     /// Recomputes the result text and the aligned rows after any change.
     fn rebuild(&mut self, cx: &mut Context<Self>) {
         let Some(model) = &self.model else { return };
+        // result lines move when a chunk changes
+        if self.selection.pane() == Some(1) {
+            self.selection.clear();
+        }
         let result = model.result();
         let theme = cx.theme().highlight_theme.clone();
         self.result = Some(DiffSide::new(Some(result.into_bytes()), language_for(&self.path), &theme));
@@ -320,6 +329,31 @@ impl MergeView {
         }
     }
 
+    /// A selectable line of pane `pane` (0 yours, 1 result, 2 theirs).
+    fn text_cell(
+        &self,
+        pane: usize,
+        side: &DiffSide,
+        line: Option<u32>,
+        bg: Option<Hsla>,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let cell = div().flex_1().min_w_0().h_full().px_1().overflow_hidden().whitespace_nowrap().flex().items_center();
+        let cell = match bg {
+            Some(bg) => cell.bg(bg),
+            None => cell,
+        };
+        let Some(line) = line else { return cell };
+        let range = side.line_range(line);
+        let text = &side.text[range.clone()];
+        let selection_bg = cx.theme().selection;
+        let selected = self.selection.selection.and_then(|s| s.line_range(pane, line, text.len()));
+        let rendered =
+            crate::selection::render_line(text, clip(&side.syntax, &range).collect(), selected, selection_bg);
+        crate::selection::attach(cell, pane, line, &rendered, text.to_string().into(), cx)
+            .child(crate::selection::line_content(rendered, selection_bg, 0.))
+    }
+
     fn render_rows(&mut self, range: Range<usize>, _: &mut Window, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let (Some(model), Some(left), Some(right), Some(result)) = (&self.model, &self.left, &self.right, &self.result)
         else {
@@ -392,26 +426,6 @@ impl MergeView {
                     .on_click(cx.listener(move |this, _, _, cx| this.ignore(i, cx)));
                 if is_left { base.child(arrow).child(cross) } else { base.child(cross).child(arrow) }.into_any_element()
             };
-            let text_cell = |side: &DiffSide, line: Option<u32>, bg: Option<Hsla>| -> AnyElement {
-                let cell = div()
-                    .flex_1()
-                    .min_w_0()
-                    .h_full()
-                    .px_1()
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .flex()
-                    .items_center();
-                let cell = match bg {
-                    Some(bg) => cell.bg(bg),
-                    None => cell,
-                };
-                let Some(line) = line else { return cell.into_any_element() };
-                let range = side.line_range(line);
-                let (display, highlights) =
-                    expand_tabs(&side.text[range.clone()], clip(&side.syntax, &range).collect());
-                cell.child(StyledText::new(display).with_highlights(highlights)).into_any_element()
-            };
             let number = |line: Option<u32>, bg: Option<Hsla>, mark: bool| {
                 div()
                     .w(px(GUTTER))
@@ -437,15 +451,15 @@ impl MergeView {
                     .flex()
                     .font_family(mono.clone())
                     .child(number(row.left, side_bg(true), is_current))
-                    .child(text_cell(left, row.left, side_bg(true)))
+                    .child(self.text_cell(0, left, row.left, side_bg(true), cx))
                     .child(left_controls)
                     .child(div().w(px(1.)).h_full().bg(border))
                     .child(number(row.result, result_bg, false))
-                    .child(text_cell(result, row.result, result_bg))
+                    .child(self.text_cell(1, result, row.result, result_bg, cx))
                     .child(div().w(px(1.)).h_full().bg(border))
                     .child(right_controls)
                     .child(number(row.right, side_bg(false), false))
-                    .child(text_cell(right, row.right, side_bg(false)))
+                    .child(self.text_cell(2, right, row.right, side_bg(false), cx))
                     .into_any_element(),
             );
         }
@@ -561,13 +575,14 @@ impl Render for MergeView {
                 )
                 .into_any_element()
         };
-        div()
-            .id("merge-view")
+        crate::selection::release(div().id("merge-view"), cx)
             .test_support()
             .key_context(CONTEXT)
             .track_focus(&self.focus)
             .on_action(cx.listener(|this, _: &NextConflict, _, cx| this.next_conflict(1, cx)))
             .on_action(cx.listener(|this, _: &PrevConflict, _, cx| this.next_conflict(-1, cx)))
+            .on_action(cx.listener(|this, _: &CopyMergeText, _, cx| this.copy_selection(cx)))
+            .on_action(cx.listener(|this, _: &SelectAllMergeText, _, cx| this.select_all_text(1, cx)))
             .size_full()
             .flex()
             .flex_col()
@@ -622,4 +637,23 @@ impl Render for MergeView {
 /// "Yours (main)" -> "Yours".
 fn short(label: &str) -> &str {
     label.split(" (").next().unwrap_or(label)
+}
+
+impl SelectableText for MergeView {
+    fn selection_state(&mut self) -> &mut SelectionState {
+        &mut self.selection
+    }
+
+    fn line_text(&self, pane: usize, line: u32) -> Option<&str> {
+        let side = [&self.left, &self.result, &self.right][pane.min(2)].as_ref()?;
+        (line < side.line_count()).then(|| &side.text[side.line_range(line)])
+    }
+
+    fn line_count(&self, pane: usize) -> u32 {
+        [&self.left, &self.result, &self.right][pane.min(2)].as_ref().map_or(0, |s| s.line_count())
+    }
+
+    fn focus_handle(&self) -> &FocusHandle {
+        &self.focus
+    }
 }

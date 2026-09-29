@@ -15,7 +15,8 @@ use rsit_diff::{Change, ChangeKind, DiffRows, Folding, Layout, Row, WhitespacePo
 use rsit_git::{FileChange, ObjectId, Repo};
 
 use crate::diff_model::{ChangeAction, DiffItem, DiffSide, FileDiff};
-use crate::text::{clip, expand_tabs, max_columns};
+use crate::selection::{SelectableText, SelectionState};
+use crate::text::{clip, max_columns};
 
 const CONTEXT: &str = "DiffView";
 const ROW_HEIGHT: f32 = 20.0;
@@ -25,7 +26,7 @@ const FOLD_CONTEXT: u32 = 4;
 /// bound horizontal scrolling.
 const CHAR_WIDTH: f32 = 8.0;
 
-actions!(diff, [NextChange, PrevChange, NextFile, PrevFile, CloseDiff, ApplyChangeAction]);
+actions!(diff, [NextChange, PrevChange, NextFile, PrevFile, CloseDiff, ApplyChangeAction, CopyText, SelectAllText]);
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
@@ -35,6 +36,8 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("alt-up", PrevFile, Some(CONTEXT)),
         KeyBinding::new("escape", CloseDiff, Some(CONTEXT)),
         KeyBinding::new("ctrl-alt-a", ApplyChangeAction, Some(CONTEXT)),
+        KeyBinding::new("ctrl-c", CopyText, Some(CONTEXT)),
+        KeyBinding::new("ctrl-a", SelectAllText, Some(CONTEXT)),
     ]);
 }
 
@@ -64,6 +67,7 @@ pub struct DiffView {
     error: Option<SharedString>,
     scroll: UniformListScrollHandle,
     focus: FocusHandle,
+    selection: SelectionState,
     _load: Option<Task<()>>,
 }
 
@@ -114,6 +118,7 @@ impl DiffView {
             error: None,
             scroll: UniformListScrollHandle::new(),
             focus,
+            selection: SelectionState::default(),
             _load: None,
         };
         this.select_file(selected, cx);
@@ -160,6 +165,7 @@ impl DiffView {
             return;
         };
         if !keep_position {
+            self.selection.clear();
             self.diff = None;
             self.expanded.clear();
             self.current_change = None;
@@ -338,6 +344,59 @@ impl DiffView {
 
     // ---- rendering ----
 
+    #[allow(clippy::too_many_arguments)]
+    fn cell(
+        &self,
+        side_diff: &DiffSide,
+        line: Option<u32>,
+        change: Option<Change>,
+        side: Side,
+        words: bool,
+        h_offset: f32,
+        colors: &DiffColors,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let base = div().flex_1().min_w_0().h_full().px_1().overflow_hidden().whitespace_nowrap().flex().items_center();
+        let Some(line) = line else {
+            // aligned filler for lines that exist only on the other side
+            return base.bg(if change.is_some() { colors.empty } else { gpui_kit::transparent_black() });
+        };
+        let range = side_diff.line_range(line);
+        let text = &side_diff.text[range.clone()];
+        let mut highlights: Vec<(Range<usize>, HighlightStyle)> = clip(&side_diff.syntax, &range).collect();
+        let base = match change {
+            Some(c) => {
+                // an insertion/deletion shown on its own side reads as that kind
+                let kind = match (c.kind, side) {
+                    (ChangeKind::Modified, _) => ChangeKind::Modified,
+                    (_, Side::Left) => ChangeKind::Deleted,
+                    (_, Side::Right) => ChangeKind::Inserted,
+                };
+                if words && c.kind == ChangeKind::Modified {
+                    let bg = colors.word_bg(c.kind, side);
+                    let word_ranges: Vec<(Range<usize>, HighlightStyle)> = side_diff
+                        .words
+                        .iter()
+                        .filter(|w| w.start < range.end && w.end > range.start)
+                        .map(|w| {
+                            let r = w.start.max(range.start) - range.start..w.end.min(range.end) - range.start;
+                            (r, HighlightStyle { background_color: Some(bg), ..Default::default() })
+                        })
+                        .collect();
+                    highlights = gpui_kit::combine_highlights(highlights, word_ranges).collect();
+                }
+                base.bg(colors.line_bg(kind))
+            }
+            None => base,
+        };
+        let pane = side as usize;
+        let selected = self.selection.selection.and_then(|s| s.line_range(pane, line, text.len()));
+        let rendered = crate::selection::render_line(text, highlights, selected, colors.selection);
+        let source: SharedString = text.to_string().into();
+        let base = crate::selection::attach(base, pane, line, &rendered, source, cx);
+        base.child(crate::selection::line_content(rendered, colors.selection, h_offset))
+    }
+
     fn render_rows(&mut self, range: Range<usize>, _: &mut Window, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let Some(diff) = self.diff.clone() else {
             return Vec::new();
@@ -397,15 +456,21 @@ impl DiffView {
                             (Some(_), _) => Some(div().w(px(14.)).flex_none().into_any_element()),
                             _ => None,
                         };
-                        let row_el = div().id(("line", ix)).h(px(ROW_HEIGHT)).w_full().flex().font_family(mono.clone());
+                        let row_el = div()
+                            .id(("line", ix))
+                            .test_support()
+                            .h(px(ROW_HEIGHT))
+                            .w_full()
+                            .flex()
+                            .font_family(mono.clone());
                         match self.settings.layout {
                             Layout::SideBySide => row_el
                                 .children(marker)
                                 .child(gutter(left, change, is_current, &colors))
-                                .child(cell(&diff.left, left, change, Side::Left, words, offset, &colors))
+                                .child(self.cell(&diff.left, left, change, Side::Left, words, offset, &colors, cx))
                                 .child(div().w(px(1.)).h_full().bg(colors.divider))
                                 .child(gutter(right, change, false, &colors))
-                                .child(cell(&diff.right, right, change, Side::Right, words, offset, &colors))
+                                .child(self.cell(&diff.right, right, change, Side::Right, words, offset, &colors, cx))
                                 .into_any_element(),
                             Layout::Unified => {
                                 let (side_diff, line, side) = match right {
@@ -416,7 +481,7 @@ impl DiffView {
                                     .children(marker)
                                     .child(gutter(left, change, is_current, &colors))
                                     .child(gutter(right, change, false, &colors))
-                                    .child(cell(side_diff, line, change, side, words, offset, &colors))
+                                    .child(self.cell(side_diff, line, change, side, words, offset, &colors, cx))
                                     .into_any_element()
                             }
                         }
@@ -649,8 +714,8 @@ impl Render for DiffView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let (bg, fg) = (theme.background, theme.foreground);
-        div()
-            .id("diff-view")
+        let root = div().id("diff-view");
+        crate::selection::release(root, cx)
             .test_support()
             .key_context(CONTEXT)
             .track_focus(&self.focus)
@@ -672,6 +737,8 @@ impl Render for DiffView {
                 }
             }))
             .on_action(cx.listener(|this, _: &ApplyChangeAction, window, cx| this.apply_action_to_current(window, cx)))
+            .on_action(cx.listener(|this, _: &CopyText, _, cx| this.copy_selection(cx)))
+            .on_action(cx.listener(|this, _: &SelectAllText, _, cx| this.select_all_text(1, cx)))
             .size_full()
             .flex()
             .flex_col()
@@ -693,8 +760,8 @@ impl Render for DiffView {
 
 #[derive(Clone, Copy)]
 enum Side {
-    Left,
-    Right,
+    Left = 0,
+    Right = 1,
 }
 
 struct DiffColors {
@@ -709,6 +776,7 @@ struct DiffColors {
     divider: Hsla,
     muted: Hsla,
     current: Hsla,
+    selection: Hsla,
 }
 
 impl DiffColors {
@@ -729,6 +797,7 @@ impl DiffColors {
                 divider: theme.border,
                 muted: theme.muted_foreground,
                 current: c(0x7a9ec2),
+                selection: theme.selection,
             }
         } else {
             Self {
@@ -743,6 +812,7 @@ impl DiffColors {
                 divider: theme.border,
                 muted: theme.muted_foreground,
                 current: c(0x3574f0),
+                selection: theme.selection,
             }
         }
     }
@@ -780,52 +850,6 @@ fn gutter(line: Option<u32>, change: Option<Change>, current: bool, colors: &Dif
         .children(line.map(|l| (l + 1).to_string()))
 }
 
-fn cell(
-    side_diff: &DiffSide,
-    line: Option<u32>,
-    change: Option<Change>,
-    side: Side,
-    words: bool,
-    h_offset: f32,
-    colors: &DiffColors,
-) -> impl IntoElement {
-    let base = div().flex_1().min_w_0().h_full().px_1().overflow_hidden().whitespace_nowrap().flex().items_center();
-    let Some(line) = line else {
-        // aligned filler for lines that exist only on the other side
-        return base.bg(if change.is_some() { colors.empty } else { gpui_kit::transparent_black() });
-    };
-    let range = side_diff.line_range(line);
-    let text = &side_diff.text[range.clone()];
-    let mut highlights: Vec<(Range<usize>, HighlightStyle)> = clip(&side_diff.syntax, &range).collect();
-    let base = match change {
-        Some(c) => {
-            // an insertion/deletion shown on its own side reads as that kind
-            let kind = match (c.kind, side) {
-                (ChangeKind::Modified, _) => ChangeKind::Modified,
-                (_, Side::Left) => ChangeKind::Deleted,
-                (_, Side::Right) => ChangeKind::Inserted,
-            };
-            if words && c.kind == ChangeKind::Modified {
-                let bg = colors.word_bg(c.kind, side);
-                let word_ranges: Vec<(Range<usize>, HighlightStyle)> = side_diff
-                    .words
-                    .iter()
-                    .filter(|w| w.start < range.end && w.end > range.start)
-                    .map(|w| {
-                        let r = w.start.max(range.start) - range.start..w.end.min(range.end) - range.start;
-                        (r, HighlightStyle { background_color: Some(bg), ..Default::default() })
-                    })
-                    .collect();
-                highlights = gpui_kit::combine_highlights(highlights, word_ranges).collect();
-            }
-            base.bg(colors.line_bg(kind))
-        }
-        None => base,
-    };
-    let (display, highlights) = expand_tabs(text, highlights);
-    base.child(div().flex_none().ml(px(-h_offset)).child(StyledText::new(display).with_highlights(highlights)))
-}
-
 fn clone_diff(diff: &FileDiff) -> FileDiff {
     let side = |s: &DiffSide| DiffSide {
         text: s.text.clone(),
@@ -840,5 +864,25 @@ fn clone_diff(diff: &FileDiff) -> FileDiff {
         fragments: diff.fragments.clone(),
         binary: diff.binary,
         language: diff.language,
+    }
+}
+
+impl SelectableText for DiffView {
+    fn selection_state(&mut self) -> &mut SelectionState {
+        &mut self.selection
+    }
+
+    fn line_text(&self, pane: usize, line: u32) -> Option<&str> {
+        let diff = self.diff.as_ref()?;
+        let side = if pane == 0 { &diff.left } else { &diff.right };
+        (line < side.line_count()).then(|| &side.text[side.line_range(line)])
+    }
+
+    fn line_count(&self, pane: usize) -> u32 {
+        self.diff.as_ref().map_or(0, |d| if pane == 0 { d.left.line_count() } else { d.right.line_count() })
+    }
+
+    fn focus_handle(&self) -> &FocusHandle {
+        &self.focus
     }
 }

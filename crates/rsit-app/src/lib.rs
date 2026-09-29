@@ -15,6 +15,7 @@ pub mod log_view;
 pub mod merge_view;
 pub mod navigator;
 pub mod rebase_view;
+pub mod selection;
 pub mod tasks;
 pub mod text;
 pub mod workspace;
@@ -30,6 +31,7 @@ pub fn init(cx: &mut gpui_kit::App) {
     file_view::init(cx);
     rebase_view::init(cx);
     merge_view::init(cx);
+    blame_view::init(cx);
 }
 
 gpui_kit::assets::icon_assets!(ExtraIcons, [GitBranch, ArrowDownToLine, ArrowUpFromLine]);

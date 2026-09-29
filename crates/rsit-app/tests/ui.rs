@@ -641,3 +641,117 @@ async fn merge_window_resolves_and_stages(cx: &mut TestAppContext) {
     assert_eq!(merged, expected);
     assert!(rsit_git::conflicts::conflicted_paths(p).unwrap().is_empty(), "staged as resolved");
 }
+
+#[gpui_kit::test]
+async fn diff_text_can_be_selected_and_copied(cx: &mut TestAppContext) {
+    isolate_cache();
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path();
+    git(p, &["init", "-q", "-b", "main"]);
+    std::fs::write(p.join("a.txt"), "alpha one\nbeta two\ngamma three\n").unwrap();
+    git(p, &["add", "."]);
+    git(p, &["commit", "-qm", "base"]);
+    std::fs::write(p.join("a.txt"), "alpha one\nbeta 2\ngamma three\n").unwrap();
+    git(p, &["commit", "-qam", "edit"]);
+
+    cx.update(rsit_app::init);
+    let repo = rsit_git::Repo::discover(p).unwrap();
+    let local = repo.local();
+    let commit = local.rev_parse_single("HEAD").unwrap().detach();
+    let parent = rsit_git::first_parent(&local, commit).unwrap();
+    let files: Vec<rsit_app::diff_model::DiffItem> = rsit_git::changed_files(&local, commit)
+        .unwrap()
+        .into_iter()
+        .map(|f| rsit_app::diff_model::DiffItem::for_commit(f, parent, commit))
+        .collect();
+    let (window, _view) = cx.update(|cx| {
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(Bounds {
+                origin: point(px(0.), px(0.)),
+                size: size(px(1200.), px(800.)),
+            })),
+            ..Default::default()
+        };
+        gpui_kit::open_window(options, cx, |window, cx| {
+            cx.new(|cx| rsit_app::diff_view::DiffView::new(repo, files, 0, window, cx))
+        })
+        .unwrap()
+    });
+    let window: gpui_kit::AnyWindowHandle = window;
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        // rows 0..3 are the three lines (nothing folded); drag in the left pane
+        // from the start of row 0 to past the end of row 1
+        let row0 = window.find(("line", 0usize)).bounds();
+        let row1 = window.find(("line", 1usize)).bounds();
+        let text_x = row0.origin.x + px(48. + 4. + 1.);
+        let pane_end = row1.origin.x + row1.size.width / 2. - px(8.);
+        window.drag(point(text_x, row0.center().y), point(pane_end, row1.center().y), cx);
+        window.press("ctrl-c", cx);
+    })
+    .unwrap();
+    let copied = cx.read_from_clipboard().and_then(|c| c.text()).unwrap_or_default();
+    assert_eq!(copied, "alpha one\nbeta two");
+
+    // select all copies the whole side that has the selection
+    cx.update_window(window, |_, window, cx| {
+        window.press("ctrl-a", cx);
+        window.press("ctrl-c", cx);
+    })
+    .unwrap();
+    let all = cx.read_from_clipboard().and_then(|c| c.text()).unwrap_or_default();
+    assert_eq!(all, "alpha one\nbeta two\ngamma three\n");
+}
+
+#[gpui_kit::test]
+async fn annotate_text_can_be_copied(cx: &mut TestAppContext) {
+    isolate_cache();
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path();
+    git(p, &["init", "-q", "-b", "main"]);
+    std::fs::write(p.join("a.txt"), "first line\n\tsecond\n").unwrap();
+    git(p, &["add", "."]);
+    git(p, &["commit", "-qm", "base"]);
+    cx.update(rsit_app::init);
+    let repo = rsit_git::Repo::discover(p).unwrap();
+    let (window, _) = cx.update(|cx| {
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(Bounds {
+                origin: point(px(0.), px(0.)),
+                size: size(px(1000.), px(600.)),
+            })),
+            ..Default::default()
+        };
+        gpui_kit::open_window(options, cx, |window, cx| {
+            cx.new(|cx| {
+                rsit_app::file_view::FileView::new(
+                    repo,
+                    "a.txt".into(),
+                    None,
+                    rsit_app::file_view::FileTab::Annotate,
+                    window,
+                    cx,
+                )
+            })
+        })
+        .unwrap()
+    });
+    let window: gpui_kit::AnyWindowHandle = window;
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        // drag across "second" (after the tab) in the code column, past the annotation (230) and number (48) columns
+        let row = window.find(("blame-line", 1usize)).bounds();
+        let x = row.origin.x + px(230. + 48. + 8. + 60.);
+        window.drag(point(x, row.center().y), point(x + px(400.), row.center().y), cx);
+        window.press("ctrl-c", cx);
+    })
+    .unwrap();
+    let dragged = cx.read_from_clipboard().and_then(|c| c.text()).unwrap_or_default();
+    assert!(!dragged.is_empty() && "second".ends_with(&dragged), "tabs map back to the source: {dragged:?}");
+    cx.update_window(window, |_, window, cx| {
+        window.press("ctrl-a", cx);
+        window.press("ctrl-c", cx);
+    })
+    .unwrap();
+    assert_eq!(cx.read_from_clipboard().and_then(|c| c.text()).unwrap_or_default(), "first line\n\tsecond\n");
+}

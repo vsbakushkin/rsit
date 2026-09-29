@@ -14,9 +14,20 @@ use rsit_git::{ObjectId, Repo};
 
 use crate::diff_model::{DiffSide, language_for};
 use crate::file_view::{self, FileTab};
-use crate::text::{clip, expand_tabs, max_columns};
+use crate::selection::{SelectableText, SelectionState};
+use crate::text::{clip, max_columns};
 
 const ROW_HEIGHT: f32 = 20.0;
+const CONTEXT: &str = "BlameView";
+
+actions!(blame, [CopyBlameText, SelectAllBlameText]);
+
+pub fn init(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("ctrl-c", CopyBlameText, Some(CONTEXT)),
+        KeyBinding::new("ctrl-a", SelectAllBlameText, Some(CONTEXT)),
+    ]);
+}
 const ANNOTATION_WIDTH: f32 = 230.0;
 const CHAR_WIDTH: f32 = 8.0;
 
@@ -39,6 +50,8 @@ pub struct BlameView {
     error: Option<SharedString>,
     h_offset: f32,
     scroll: UniformListScrollHandle,
+    selection: SelectionState,
+    focus: FocusHandle,
     _load: Option<Task<()>>,
 }
 
@@ -55,6 +68,8 @@ impl BlameView {
             error: None,
             h_offset: 0.0,
             scroll: UniformListScrollHandle::new(),
+            selection: SelectionState::default(),
+            focus: cx.focus_handle(),
             _load: None,
         };
         this.reload(cx);
@@ -160,6 +175,7 @@ impl BlameView {
         let age_color: Hsla = if theme.is_dark() { rgb(0x4a7a52).into() } else { rgb(0x8fce9a).into() };
         let uncommitted_color: Hsla = if theme.is_dark() { rgb(0x5a5a2a).into() } else { rgb(0xf2e6a0).into() };
         let hover_color = theme.list_active;
+        let selection_bg = theme.selection;
         let h_offset = self.h_offset;
         range
             .map(|i| {
@@ -239,9 +255,33 @@ impl BlameView {
                     });
                 let range = data.side.line_range(i as u32);
                 let text = &data.side.text[range.clone()];
-                let (display, highlights) = expand_tabs(text, clip(&data.side.syntax, &range).collect());
+                let selected = self.selection.selection.and_then(|s| s.line_range(0, i as u32, text.len()));
+                let rendered = crate::selection::render_line(
+                    text,
+                    clip(&data.side.syntax, &range).collect(),
+                    selected,
+                    selection_bg,
+                );
+                let code = crate::selection::attach(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
+                        .px_2()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .flex()
+                        .items_center(),
+                    0,
+                    i as u32,
+                    &rendered,
+                    text.to_string().into(),
+                    cx,
+                )
+                .child(crate::selection::line_content(rendered, selection_bg, h_offset));
                 div()
                     .id(("blame-line", i))
+                    .test_support()
                     .h(px(ROW_HEIGHT))
                     .w_full()
                     .flex()
@@ -261,22 +301,7 @@ impl BlameView {
                             .text_color(muted)
                             .child((i + 1).to_string()),
                     )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .px_2()
-                            .overflow_hidden()
-                            .whitespace_nowrap()
-                            .flex()
-                            .items_center()
-                            .child(
-                                div()
-                                    .flex_none()
-                                    .ml(px(-h_offset))
-                                    .child(StyledText::new(display).with_highlights(highlights)),
-                            ),
-                    )
+                    .child(code)
                     .into_any_element()
             })
             .collect()
@@ -341,7 +366,11 @@ impl Render for BlameView {
             Some(rev) => format!("{} @ {}", self.path, rev.to_hex_with_len(8)),
             None => self.path.clone(),
         };
-        div()
+        crate::selection::release(div().id("blame-view"), cx)
+            .key_context(CONTEXT)
+            .track_focus(&self.focus)
+            .on_action(cx.listener(|this, _: &CopyBlameText, _, cx| this.copy_selection(cx)))
+            .on_action(cx.listener(|this, _: &SelectAllBlameText, _, cx| this.select_all_text(0, cx)))
             .size_full()
             .flex()
             .flex_col()
@@ -387,4 +416,23 @@ fn short_name(name: &str) -> String {
 fn format_date(secs: i64) -> String {
     use chrono::{Local, TimeZone};
     Local.timestamp_opt(secs, 0).single().map(|t| t.format("%d.%m.%Y").to_string()).unwrap_or_default()
+}
+
+impl SelectableText for BlameView {
+    fn selection_state(&mut self) -> &mut SelectionState {
+        &mut self.selection
+    }
+
+    fn line_text(&self, _: usize, line: u32) -> Option<&str> {
+        let side = &self.data.as_ref()?.side;
+        (line < side.line_count()).then(|| &side.text[side.line_range(line)])
+    }
+
+    fn line_count(&self, _: usize) -> u32 {
+        self.data.as_ref().map_or(0, |d| d.side.line_count())
+    }
+
+    fn focus_handle(&self) -> &FocusHandle {
+        &self.focus
+    }
 }

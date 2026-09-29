@@ -10,6 +10,7 @@ use rsit_git::{CommitGraphData, CommitMeta, ObjectId, Ref, RefKind, Refs, Repo};
 use rsit_graph::{FilteredGraph, GraphCommit, GraphElement, PermanentGraph, PrintElement, PrintElementGenerator};
 
 pub mod filter;
+pub mod watch;
 pub use filter::LogFilter;
 
 /// Commits to load for the first screen before the full history is read.

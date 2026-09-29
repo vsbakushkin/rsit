@@ -17,3 +17,4 @@ gix.workspace = true
 rsit-graph.workspace = true
 rsit-git.workspace = true
 rsit-log.workspace = true
+futures.workspace = true

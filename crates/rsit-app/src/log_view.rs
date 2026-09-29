@@ -61,6 +61,7 @@ pub struct LogView {
     _filter: Option<Task<()>>,
     _filter_delay: Option<Task<()>>,
     _changes: Option<Task<()>>,
+    _watch: Option<(rsit_log::watch::RefsWatcher, Task<()>)>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -108,20 +109,51 @@ impl LogView {
             _filter: None,
             _filter_delay: None,
             _changes: None,
+            _watch: None,
             _subscriptions: subscriptions,
         };
-        this.reload(cx);
+        this.reload(true, cx);
+        this.watch_refs(cx);
         this
+    }
+
+    /// Refreshes the log when refs change on disk (commit, fetch, checkout…).
+    fn watch_refs(&mut self, cx: &mut Context<Self>) {
+        let (watcher, mut events) = match rsit_log::watch::watch_refs(&self.repo) {
+            Ok(w) => w,
+            Err(e) => {
+                eprintln!("rsit: cannot watch refs: {e:#}");
+                return;
+            }
+        };
+        let task = cx.spawn(async move |this, cx| {
+            use futures::StreamExt as _;
+            while events.next().await.is_some() {
+                // git writes several files per operation; wait for it to settle
+                cx.background_executor().timer(Duration::from_millis(300)).await;
+                while events.try_recv().is_ok() {}
+                if this.update(cx, |this, cx| this.reload(false, cx)).is_err() {
+                    break;
+                }
+            }
+        });
+        self._watch = Some((watcher, task));
     }
 
     // ---- loading ----
 
-    /// Loads the first screen quickly, then the whole history.
-    fn reload(&mut self, cx: &mut Context<Self>) {
+    /// Loads the history. With `first_screen`, shows the newest commits first
+    /// and then the whole history (startup); otherwise swaps in the new data once.
+    fn reload(&mut self, first_screen: bool, cx: &mut Context<Self>) {
         let repo = self.repo.clone();
         self.loading = true;
         self._load = Some(cx.spawn(async move |this, cx| {
             let started = std::time::Instant::now();
+            if !first_screen {
+                let full = cx.background_spawn(async move { LogData::load(repo, None) }).await;
+                this.update(cx, |this, cx| this.set_data(full, started, cx)).ok();
+                return;
+            }
             let first = {
                 let repo = repo.clone();
                 cx.background_spawn(async move { LogData::load(repo, Some(rsit_log::FIRST_SCREEN_COMMITS)) }).await
@@ -382,8 +414,16 @@ impl LogView {
                             .items_center()
                             .gap_1()
                             .overflow_hidden()
-                            .child(div().flex_shrink(1.).min_w_0().truncate().child(subject))
-                            .children(data.refs_at(permanent).iter().take(4).map(ref_label)),
+                            .child(div().flex_shrink(1.).min_w(px(120.)).truncate().child(subject))
+                            .child(
+                                div()
+                                    .flex()
+                                    .gap_1()
+                                    .flex_shrink(1.)
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .children(data.refs_at(permanent).iter().take(4).map(ref_label)),
+                            ),
                     )
                     .child(div().w(px(160.)).flex_none().px_2().truncate().text_color(muted).child(author))
                     .child(div().w(px(130.)).flex_none().px_2().truncate().text_color(muted).child(date))
@@ -678,7 +718,7 @@ impl Render for LogView {
                 let focus = this.text_input.read(cx).focus_handle(cx);
                 window.focus(&focus, cx);
             }))
-            .on_action(cx.listener(|this, _: &Refresh, _, cx| this.reload(cx)))
+            .on_action(cx.listener(|this, _: &Refresh, _, cx| this.reload(false, cx)))
             .child(self.render_toolbar(cx))
             .child(
                 div().flex_1().min_h_0().child(

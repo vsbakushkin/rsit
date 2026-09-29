@@ -20,15 +20,19 @@ pub struct Repo {
     repo: gix::ThreadSafeRepository,
     workdir: Option<PathBuf>,
     git_dir: PathBuf,
+    common_dir: PathBuf,
 }
 
 impl Repo {
     /// Finds the repository containing `path`.
     pub fn discover(path: &Path) -> Result<Self> {
-        let repo = gix::discover(path).with_context(|| format!("not a git repository: {}", path.display()))?;
+        // absolute paths keep file watching and `git` invocations independent of the cwd
+        let path = path.canonicalize().with_context(|| format!("no such path: {}", path.display()))?;
+        let repo = gix::discover(&path).with_context(|| format!("not a git repository: {}", path.display()))?;
         let workdir = repo.workdir().map(Path::to_path_buf);
         let git_dir = repo.git_dir().to_path_buf();
-        Ok(Self { repo: repo.into_sync(), workdir, git_dir })
+        let common_dir = repo.common_dir().to_path_buf();
+        Ok(Self { repo: repo.into_sync(), workdir, git_dir, common_dir })
     }
 
     pub fn local(&self) -> gix::Repository {
@@ -43,6 +47,11 @@ impl Repo {
 
     pub fn git_dir(&self) -> &Path {
         &self.git_dir
+    }
+
+    /// Directory with refs and objects shared by all worktrees.
+    pub fn common_dir(&self) -> &Path {
+        &self.common_dir
     }
 
     /// Directory where `git` commands should run.

@@ -9,3 +9,5 @@ anyhow.workspace = true
 gix.workspace = true
 rsit-git.workspace = true
 rsit-graph.workspace = true
+notify.workspace = true
+futures.workspace = true

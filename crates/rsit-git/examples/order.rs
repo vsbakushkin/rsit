@@ -4,7 +4,7 @@ fn main() -> anyhow::Result<()> {
     let repo = rsit_git::Repo::discover(path.as_ref())?;
     let local = repo.local();
     let refs = rsit_git::read_refs(&local)?;
-    let data = rsit_git::load_commit_graph(&local, &refs.tips(), None)?;
+    let data = rsit_git::load_commit_graph(&local, &refs.tips(), None, None)?;
     for id in &data.ids {
         println!("{id}");
     }

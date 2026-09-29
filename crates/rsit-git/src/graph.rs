@@ -6,20 +6,35 @@ use gix::ObjectId;
 use gix::revision::walk::Sorting;
 use gix::traverse::commit::simple::CommitTimeOrder;
 
+/// Parent index of a commit that is not loaded (shallow clone or partial walk).
+pub const MISSING: u32 = u32::MAX;
+
 /// Every commit reachable from the given tips, in `git log --date-order` order:
 /// children before parents, otherwise newest commit time first.
 #[derive(Default)]
 pub struct CommitGraphData {
     /// Commit ids in display order.
     pub ids: Vec<ObjectId>,
-    /// Parent indices into `ids`; `u32::MAX` marks a parent that is not loaded
-    /// (shallow clone or a partial walk).
-    pub parents: Vec<Vec<u32>>,
     pub times: Vec<i64>,
+    /// `parent_list[parent_offsets[i]..parent_offsets[i + 1]]` are the parents of `i`.
+    parent_offsets: Vec<u32>,
+    parent_list: Vec<u32>,
     pub index: HashMap<ObjectId, u32>,
 }
 
 impl CommitGraphData {
+    /// Builds from raw arrays (e.g. read from a cache); parents are indices, `MISSING` allowed.
+    pub fn from_parts(ids: Vec<ObjectId>, times: Vec<i64>, parent_offsets: Vec<u32>, parent_list: Vec<u32>) -> Self {
+        assert_eq!(ids.len(), times.len());
+        assert_eq!(parent_offsets.len(), ids.len() + 1);
+        let index = ids.iter().enumerate().map(|(i, id)| (*id, i as u32)).collect();
+        Self { ids, times, parent_offsets, parent_list, index }
+    }
+
+    pub fn parts(&self) -> (&[ObjectId], &[i64], &[u32], &[u32]) {
+        (&self.ids, &self.times, &self.parent_offsets, &self.parent_list)
+    }
+
     pub fn len(&self) -> usize {
         self.ids.len()
     }
@@ -27,95 +42,167 @@ impl CommitGraphData {
     pub fn is_empty(&self) -> bool {
         self.ids.is_empty()
     }
+
+    /// Parent indices of commit `i` (`MISSING` for parents that are not loaded).
+    pub fn parents(&self, i: u32) -> &[u32] {
+        &self.parent_list[self.parent_offsets[i as usize] as usize..self.parent_offsets[i as usize + 1] as usize]
+    }
+}
+
+/// Commits in arbitrary order with parents as indices into the same arrays.
+struct Unsorted {
+    ids: Vec<ObjectId>,
+    times: Vec<i64>,
+    offsets: Vec<u32>,
+    list: Vec<u32>,
+}
+
+impl Unsorted {
+    fn parents(&self, i: usize) -> &[u32] {
+        &self.list[self.offsets[i] as usize..self.offsets[i + 1] as usize]
+    }
 }
 
 /// Walks the history of `tips`. `limit` stops the walk after that many commits
-/// (used for the fast first screen).
-pub fn load_commit_graph(repo: &gix::Repository, tips: &[ObjectId], limit: Option<usize>) -> Result<CommitGraphData> {
-    struct Raw {
-        id: ObjectId,
-        parents: Vec<ObjectId>,
-        time: i64,
-    }
-    let mut raw: Vec<Raw> = Vec::new();
-    if !tips.is_empty() {
+/// (used for the fast first screen). Commits in `cache` are taken from it
+/// instead of being read again; only newer history is walked.
+pub fn load_commit_graph<'a>(
+    repo: &'a gix::Repository,
+    tips: &[ObjectId],
+    limit: Option<usize>,
+    cache: Option<&'a CommitGraphData>,
+) -> Result<CommitGraphData> {
+    let mut new_ids: Vec<ObjectId> = Vec::new();
+    let mut new_times: Vec<i64> = Vec::new();
+    let mut new_parents: Vec<Vec<ObjectId>> = Vec::new();
+    let tips_to_walk: Vec<ObjectId> =
+        tips.iter().copied().filter(|t| cache.is_none_or(|c| !c.index.contains_key(t))).collect();
+    if !tips_to_walk.is_empty() {
         let walk = repo
-            .rev_walk(tips.iter().copied())
+            .rev_walk(tips_to_walk)
             .sorting(Sorting::ByCommitTime(CommitTimeOrder::NewestFirst))
             .use_commit_graph(true)
-            .all()?;
+            .selected(move |id| cache.is_none_or(|c| !c.index.contains_key(id)))?;
         for info in walk {
             let info = info?;
-            raw.push(Raw {
-                id: info.id,
-                parents: info.parent_ids.iter().copied().collect(),
-                time: info.commit_time.unwrap_or_default(),
-            });
-            if limit.is_some_and(|l| raw.len() >= l) {
+            new_ids.push(info.id);
+            new_times.push(info.commit_time.unwrap_or_default());
+            new_parents.push(info.parent_ids.iter().copied().collect());
+            if limit.is_some_and(|l| new_ids.len() >= l) {
                 break;
             }
         }
     }
 
-    // walk position -> index; parents missing from the walk are "not loaded"
-    let pos: HashMap<ObjectId, u32> = raw.iter().enumerate().map(|(i, r)| (r.id, i as u32)).collect();
-    let parents: Vec<Vec<u32>> =
-        raw.iter().map(|r| r.parents.iter().map(|p| pos.get(p).copied().unwrap_or(u32::MAX)).collect()).collect();
+    // combined index space: new commits first, then the cached ones
+    let k = new_ids.len() as u32;
+    let new_pos: HashMap<ObjectId, u32> = new_ids.iter().enumerate().map(|(i, id)| (*id, i as u32)).collect();
+    let lookup = |id: &ObjectId| -> u32 {
+        new_pos
+            .get(id)
+            .copied()
+            .or_else(|| cache.and_then(|c| c.index.get(id)).map(|&i| i + k))
+            .unwrap_or(MISSING)
+    };
+    let cached_len = cache.map_or(0, |c| c.len());
+    let n = k as usize + cached_len;
+    let mut all = Unsorted {
+        ids: Vec::with_capacity(n),
+        times: Vec::with_capacity(n),
+        offsets: Vec::with_capacity(n + 1),
+        list: Vec::with_capacity(n + n / 8),
+    };
+    all.offsets.push(0);
+    for (i, parents) in new_parents.iter().enumerate() {
+        all.ids.push(new_ids[i]);
+        all.times.push(new_times[i]);
+        all.list.extend(parents.iter().map(&lookup));
+        all.offsets.push(all.list.len() as u32);
+    }
+    if let Some(c) = cache {
+        all.ids.extend_from_slice(&c.ids);
+        all.times.extend_from_slice(&c.times);
+        for i in 0..c.len() as u32 {
+            all.list.extend(c.parents(i).iter().map(|&p| if p == MISSING { MISSING } else { p + k }));
+            all.offsets.push(all.list.len() as u32);
+        }
+    }
 
-    // Kahn's algorithm with a max-heap on commit time, ties in walk order
-    // (git's `sort_in_topological_order` with REV_SORT_BY_COMMIT_DATE).
-    let n = raw.len();
+    // only commits reachable from the current tips (branches may have been
+    // deleted or rewritten since the cache was written)
+    let reachable = if cache.is_some() {
+        let mut reachable = vec![false; n];
+        let mut stack: Vec<u32> = tips.iter().map(&lookup).filter(|&i| i != MISSING).collect();
+        for &s in &stack {
+            reachable[s as usize] = true;
+        }
+        while let Some(i) = stack.pop() {
+            for &p in all.parents(i as usize) {
+                if p != MISSING && !reachable[p as usize] {
+                    reachable[p as usize] = true;
+                    stack.push(p);
+                }
+            }
+        }
+        Some(reachable)
+    } else {
+        None
+    };
+    Ok(date_order(&all, reachable.as_deref()))
+}
+
+/// Kahn's algorithm with a max-heap on commit time; ties are broken by insertion
+/// order like git's prio_queue (`sort_in_topological_order` with
+/// REV_SORT_BY_COMMIT_DATE), which reproduces `git log --date-order`.
+fn date_order(all: &Unsorted, keep: Option<&[bool]>) -> CommitGraphData {
+    let n = all.ids.len();
+    let kept = |i: usize| keep.is_none_or(|k| k[i]);
     let mut children = vec![0u32; n];
-    for ps in &parents {
-        for &p in ps {
-            if p != u32::MAX {
+    for i in (0..n).filter(|&i| kept(i)) {
+        for &p in all.parents(i) {
+            if p != MISSING {
                 children[p as usize] += 1;
             }
         }
     }
-    // ties are broken by insertion order, like git's prio_queue
     let mut seq = 0u32;
-    let mut heap: BinaryHeap<(i64, Reverse<u32>, u32)> = BinaryHeap::with_capacity(n);
-    for i in 0..n as u32 {
-        if children[i as usize] == 0 {
-            heap.push((raw[i as usize].time, Reverse(seq), i));
+    let mut heap: BinaryHeap<(i64, Reverse<u32>, u32)> = BinaryHeap::with_capacity(1024);
+    for i in 0..n {
+        if kept(i) && children[i] == 0 {
+            heap.push((all.times[i], Reverse(seq), i as u32));
             seq += 1;
         }
     }
     let mut order: Vec<u32> = Vec::with_capacity(n);
     while let Some((_, _, i)) = heap.pop() {
         order.push(i);
-        for &p in &parents[i as usize] {
-            if p == u32::MAX {
+        for &p in all.parents(i as usize) {
+            if p == MISSING {
                 continue;
             }
             let c = &mut children[p as usize];
             *c -= 1;
             if *c == 0 {
-                heap.push((raw[p as usize].time, Reverse(seq), p));
+                heap.push((all.times[p as usize], Reverse(seq), p));
                 seq += 1;
             }
         }
     }
 
-    let mut new_index = vec![0u32; n];
+    let mut new_index = vec![MISSING; n];
     for (new, &old) in order.iter().enumerate() {
         new_index[old as usize] = new as u32;
     }
-    let mut out = CommitGraphData {
-        ids: Vec::with_capacity(n),
-        parents: Vec::with_capacity(n),
-        times: Vec::with_capacity(n),
-        index: HashMap::with_capacity(n),
-    };
+    let mut ids = Vec::with_capacity(order.len());
+    let mut times = Vec::with_capacity(order.len());
+    let mut offsets = Vec::with_capacity(order.len() + 1);
+    let mut list = Vec::with_capacity(all.list.len());
+    offsets.push(0);
     for &old in &order {
-        let r = &raw[old as usize];
-        out.index.insert(r.id, out.ids.len() as u32);
-        out.ids.push(r.id);
-        out.times.push(r.time);
-        out.parents.push(
-            parents[old as usize].iter().map(|&p| if p == u32::MAX { u32::MAX } else { new_index[p as usize] }).collect(),
-        );
+        ids.push(all.ids[old as usize]);
+        times.push(all.times[old as usize]);
+        list.extend(all.parents(old as usize).iter().map(|&p| if p == MISSING { MISSING } else { new_index[p as usize] }));
+        offsets.push(list.len() as u32);
     }
-    Ok(out)
+    CommitGraphData::from_parts(ids, times, offsets, list)
 }

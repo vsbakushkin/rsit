@@ -6874,6 +6874,16 @@ name = "rsit-graph"
 version = "0.1.0"
 
 [[package]]
+name = "rsit-index"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "gix",
+ "rsit-git",
+ "tempfile",
+]
+
+[[package]]
 name = "rsit-log"
 version = "0.1.0"
 dependencies = [
@@ -6883,6 +6893,8 @@ dependencies = [
  "notify 8.2.0",
  "rsit-git",
  "rsit-graph",
+ "rsit-index",
+ "tempfile",
 ]
 
 [[package]]

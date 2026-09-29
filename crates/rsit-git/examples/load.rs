@@ -9,14 +9,14 @@ fn main() -> anyhow::Result<()> {
     let refs = rsit_git::read_refs(&local)?;
     println!("refs: {} in {:?}", refs.refs.len(), t.elapsed());
     let t = Instant::now();
-    let first = rsit_git::load_commit_graph(&local, &refs.tips(), Some(1000))?;
+    let first = rsit_git::load_commit_graph(&local, &refs.tips(), Some(1000), None)?;
     println!("first {} commits in {:?}", first.len(), t.elapsed());
     let t = Instant::now();
-    let data = rsit_git::load_commit_graph(&local, &refs.tips(), None)?;
+    let data = rsit_git::load_commit_graph(&local, &refs.tips(), None, None)?;
     println!("all {} commits in {:?}", data.len(), t.elapsed());
     let t = Instant::now();
     let commits: Vec<rsit_graph::GraphCommit<u32>> = (0..data.len())
-        .map(|i| rsit_graph::GraphCommit { id: i as u32, parents: data.parents[i].clone() })
+        .map(|i| rsit_graph::GraphCommit { id: i as u32, parents: data.parents(i as u32).to_vec() })
         .collect();
     let heads: Vec<u32> = refs.tips().iter().filter_map(|t| data.index.get(t).copied()).collect();
     let graph = rsit_graph::PermanentGraph::new(&commits, heads, |a, b| a.cmp(b));

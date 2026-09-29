@@ -34,8 +34,20 @@ impl LogData {
     pub fn load(repo: Repo, limit: Option<usize>) -> Result<Self> {
         let local = repo.local();
         let refs = rsit_git::read_refs(&local)?;
-        let commits = rsit_git::load_commit_graph(&local, &refs.tips(), limit)?;
+        // shallow repositories may gain parents on fetch; do not cache them
+        let cache_path = if local.is_shallow() { None } else { rsit_index::graph_path(&repo) };
+        let cache = cache_path.as_deref().and_then(rsit_index::read_graph);
+        // with a cache the whole history is cheap, no need for a first screen
+        let limit = if cache.is_some() { None } else { limit };
+        let commits = rsit_git::load_commit_graph(&local, &refs.tips(), limit, cache.as_ref())?;
         let partial = limit.is_some_and(|l| commits.len() >= l);
+        if let Some(path) = cache_path.filter(|_| !partial) {
+            if cache.is_none_or(|c| c.ids != commits.ids) {
+                if let Err(e) = rsit_index::write_graph(&path, &commits) {
+                    eprintln!("rsit: cannot write graph cache {}: {e:#}", path.display());
+                }
+            }
+        }
         Ok(Self::from_parts(repo, refs, commits, partial))
     }
 
@@ -53,16 +65,14 @@ impl LogData {
         // not loaded parents get ids past the loaded range so every id is unique
         let n = commits.len() as u32;
         let mut next_missing = n;
-        let graph_commits: Vec<GraphCommit<u32>> = commits
-            .parents
-            .iter()
-            .enumerate()
-            .map(|(i, ps)| GraphCommit {
-                id: i as u32,
-                parents: ps
+        let graph_commits: Vec<GraphCommit<u32>> = (0..n)
+            .map(|i| GraphCommit {
+                id: i,
+                parents: commits
+                    .parents(i)
                     .iter()
                     .map(|&p| {
-                        if p == u32::MAX {
+                        if p == rsit_git::MISSING {
                             next_missing += 1;
                             next_missing
                         } else {
@@ -154,7 +164,7 @@ impl LogData {
 
     /// Rows of the direct parents that are loaded.
     pub fn parent_rows(&self, row: u32) -> impl Iterator<Item = u32> + '_ {
-        self.commits.parents[row as usize].iter().copied().filter(|&p| p != u32::MAX)
+        self.commits.parents(row).iter().copied().filter(|&p| p != rsit_git::MISSING)
     }
 }
 

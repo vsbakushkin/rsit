@@ -19,6 +19,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 rsit-graph = { path = "crates/rsit-graph" }
 rsit-git = { path = "crates/rsit-git" }
 rsit-log = { path = "crates/rsit-log" }
+rsit-index = { path = "crates/rsit-index" }
 
 [profile.dev.package."*"]
 opt-level = 2

@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result};
 pub use gix::ObjectId;
 
-pub use graph::{CommitGraphData, load_commit_graph};
+pub use graph::{CommitGraphData, MISSING, load_commit_graph};
 pub use refs::{Ref, RefKind, Refs, read_refs};
 
 /// A repository opened for reading. Cheap to clone; clones share object caches

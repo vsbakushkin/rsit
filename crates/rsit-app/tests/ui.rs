@@ -47,7 +47,16 @@ fn open(cx: &mut TestAppContext, repo: &Path) -> gpui_kit::AnyWindowHandle {
     open_view(cx, repo).0
 }
 
+/// Keeps graph caches of the temporary test repositories out of the user's cache.
+fn isolate_cache() {
+    static DIR: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    let dir = DIR.get_or_init(|| tempfile::tempdir().unwrap());
+    // SAFETY: every test sets the same value before any repository is loaded
+    unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+}
+
 fn open_view(cx: &mut TestAppContext, repo: &Path) -> (gpui_kit::AnyWindowHandle, gpui_kit::Entity<LogView>) {
+    isolate_cache();
     cx.update(rsit_app::init);
     let repo = rsit_git::Repo::discover(repo).unwrap();
     cx.update(|cx| {

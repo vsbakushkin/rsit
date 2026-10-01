@@ -26,13 +26,14 @@ jobs:
       - run: cargo fmt --all --check
 
   test:
-    name: Build and test
+    name: Build, test and lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           # PRs restore main's cache but do not save their own
+          components: clippy
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: rui314/setup-mold@v1
       # gpui's Linux dependencies (same list as gpui-component's CI)
@@ -43,3 +44,5 @@ jobs:
             libx11-xcb-dev libssl-dev libzstd-dev libvulkan1
       - run: cargo build --workspace --all-targets --locked
       - run: cargo test --workspace --locked
+      # same job as the build so clippy reuses its dependencies
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings

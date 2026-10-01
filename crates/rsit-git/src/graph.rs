@@ -24,6 +24,9 @@ pub struct CommitGraphData {
     by_id: Vec<u32>,
 }
 
+/// Borrowed raw arrays of [`CommitGraphData`], see [`CommitGraphData::parts`].
+pub type GraphParts<'a> = (&'a [ObjectId], &'a [i64], &'a [u32], &'a [u32], &'a [u32]);
+
 impl CommitGraphData {
     /// Builds from raw arrays (e.g. read from a cache); parents are indices, `MISSING` allowed.
     pub fn from_parts(ids: Vec<ObjectId>, times: Vec<i64>, parent_offsets: Vec<u32>, parent_list: Vec<u32>) -> Self {
@@ -62,7 +65,7 @@ impl CommitGraphData {
     }
 
     /// Raw arrays: ids, times, parent offsets, parent list, rows sorted by id.
-    pub fn parts(&self) -> (&[ObjectId], &[i64], &[u32], &[u32], &[u32]) {
+    pub fn parts(&self) -> GraphParts<'_> {
         (&self.ids, &self.times, &self.parent_offsets, &self.parent_list, &self.by_id)
     }
 
@@ -127,24 +130,24 @@ pub fn load_commit_graph(
     }
 
     // nothing new and every cached commit still reachable: the cache is already in display order
-    if new_ids.is_empty() {
-        if let Some(c) = cache {
-            let mut reachable = vec![false; c.len()];
-            let mut stack: Vec<u32> = tips.iter().filter_map(|t| c.row_of(t)).collect();
-            for &s in &stack {
-                reachable[s as usize] = true;
-            }
-            while let Some(i) = stack.pop() {
-                for &p in c.parents(i) {
-                    if p != MISSING && !reachable[p as usize] {
-                        reachable[p as usize] = true;
-                        stack.push(p);
-                    }
+    if new_ids.is_empty()
+        && let Some(c) = cache
+    {
+        let mut reachable = vec![false; c.len()];
+        let mut stack: Vec<u32> = tips.iter().filter_map(|t| c.row_of(t)).collect();
+        for &s in &stack {
+            reachable[s as usize] = true;
+        }
+        while let Some(i) = stack.pop() {
+            for &p in c.parents(i) {
+                if p != MISSING && !reachable[p as usize] {
+                    reachable[p as usize] = true;
+                    stack.push(p);
                 }
             }
-            if reachable.iter().all(|&r| r) {
-                return Ok(cache_owned.expect("cache present"));
-            }
+        }
+        if reachable.iter().all(|&r| r) {
+            return Ok(cache_owned.expect("cache present"));
         }
     }
 
@@ -217,8 +220,8 @@ fn date_order(all: &Unsorted, keep: Option<&[bool]>) -> CommitGraphData {
     }
     let mut seq = 0u32;
     let mut heap: BinaryHeap<(i64, Reverse<u32>, u32)> = BinaryHeap::with_capacity(1024);
-    for i in 0..n {
-        if kept(i) && children[i] == 0 {
+    for (i, &count) in children.iter().enumerate() {
+        if kept(i) && count == 0 {
             heap.push((all.times[i], Reverse(seq), i as u32));
             seq += 1;
         }

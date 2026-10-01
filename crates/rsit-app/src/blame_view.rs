@@ -225,10 +225,10 @@ impl BlameView {
                     }))
                     .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
                         this.selected = Some(index);
-                        if event.click_count() >= 2 {
-                            if let Some((id, _)) = this.commit_at(index) {
-                                crate::navigator::select_in_log(id, cx);
-                            }
+                        if event.click_count() >= 2
+                            && let Some((id, _)) = this.commit_at(index)
+                        {
+                            crate::navigator::select_in_log(id, cx);
                         }
                         cx.notify();
                     }))

@@ -42,12 +42,11 @@ impl LogData {
         let cached_ids_hash = cache.as_ref().map(|c| ids_fingerprint(&c.ids));
         let commits = rsit_git::load_commit_graph(&local, &refs.tips(), limit, cache)?;
         let partial = limit.is_some_and(|l| commits.len() >= l);
-        if let Some(path) = cache_path.filter(|_| !partial) {
-            if cached_ids_hash != Some(ids_fingerprint(&commits.ids)) {
-                if let Err(e) = rsit_index::write_graph(&path, &commits) {
-                    eprintln!("rsit: cannot write graph cache {}: {e:#}", path.display());
-                }
-            }
+        if let Some(path) = cache_path.filter(|_| !partial)
+            && cached_ids_hash != Some(ids_fingerprint(&commits.ids))
+            && let Err(e) = rsit_index::write_graph(&path, &commits)
+        {
+            eprintln!("rsit: cannot write graph cache {}: {e:#}", path.display());
         }
         Ok(Self::from_parts(repo, refs, commits, partial))
     }

@@ -129,7 +129,7 @@ impl Global for SettingsFile {}
 fn save(cx: &App) {
     let Some(SettingsFile(path)) = cx.try_global::<SettingsFile>() else { return };
     let text = serde_json::to_string_pretty(cx.global::<AppSettings>()).expect("settings serialize");
-    let result = path.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|_| std::fs::write(&path, text));
+    let result = path.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|_| std::fs::write(path, text));
     if let Err(e) = result {
         eprintln!("rsit: cannot save {}: {e}", path.display());
     }

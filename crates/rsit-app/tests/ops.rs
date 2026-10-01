@@ -45,7 +45,8 @@ fn remote_round_trip() {
     ops::fetch(b.path(), |_| {}).unwrap();
     assert_eq!(ops::ahead_behind(b.path(), "main"), Some((0, 1)));
     ops::pull(b.path(), |_| {}).unwrap();
-    assert_eq!(std::fs::read_to_string(b.path().join("f")).unwrap(), "2\n");
+    // written by git, so CRLF under core.autocrlf=true (Git for Windows' default)
+    assert_eq!(std::fs::read_to_string(b.path().join("f")).unwrap().replace("\r\n", "\n"), "2\n");
 
     // a branch pushed from a, checked out as a tracking branch in b
     git(a.path(), &["checkout", "-qb", "feature"]);
@@ -157,5 +158,6 @@ fn conflict_versions_and_resolutions() {
     assert!(conflicts::conflicted_paths(p).unwrap().is_empty());
     assert!(!p.join("gone").exists());
     ops::continue_operation(p, Operation::Merge).unwrap();
-    assert_eq!(std::fs::read_to_string(p.join("f")).unwrap(), "merged\n");
+    // with core.autocrlf=true the result is saved with CRLF, like a checkout
+    assert_eq!(std::fs::read_to_string(p.join("f")).unwrap().replace("\r\n", "\n"), "merged\n");
 }

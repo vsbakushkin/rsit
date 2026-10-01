@@ -201,8 +201,47 @@ pub enum Revision {
     Commit(ObjectId),
     /// The staging area.
     Index,
-    /// Files on disk.
+    /// Files on disk, as git would store them (see [`to_git`]).
     WorkTree,
+}
+
+/// Work tree `content` of `path` the way git stores it: with `core.autocrlf`,
+/// `eol` and other `.gitattributes` filters applied, so CRLF files on Windows
+/// compare equal to their LF blobs and patches built from them fit the index.
+pub fn to_git(repo: &gix::Repository, path: &str, content: Vec<u8>) -> Result<Vec<u8>> {
+    use gix::filter::plumbing::pipeline::convert::ToGitOutcome;
+    let (mut pipeline, index) = repo.filter_pipeline(None)?;
+    Ok(match pipeline.convert_to_git(content.as_slice(), Path::new(path), &index)? {
+        ToGitOutcome::Unchanged(_) => content,
+        ToGitOutcome::Buffer(converted) => converted.to_vec(),
+        ToGitOutcome::Process(mut reader) => {
+            let mut converted = Vec::new();
+            std::io::Read::read_to_end(&mut reader, &mut converted)?;
+            converted
+        }
+    })
+}
+
+/// The reverse of [`to_git`]: `content` of `path` as a checkout would write it.
+pub fn to_worktree(repo: &gix::Repository, path: &str, content: &[u8]) -> Result<Vec<u8>> {
+    use gix::filter::plumbing::pipeline::convert::ToWorktreeOutcome;
+    let (mut pipeline, _) = repo.filter_pipeline(None)?;
+    Ok(match pipeline.convert_to_worktree(content, path.into(), Default::default())? {
+        ToWorktreeOutcome::Unchanged(_) => content.to_vec(),
+        ToWorktreeOutcome::Buffer(converted) => converted.to_vec(),
+        ToWorktreeOutcome::Process(output) => {
+            let mut converted = Vec::new();
+            match output {
+                gix::filter::plumbing::driver::apply::MaybeDelayed::Immediate(mut reader) => {
+                    std::io::Read::read_to_end(&mut reader, &mut converted)?;
+                }
+                gix::filter::plumbing::driver::apply::MaybeDelayed::Delayed(_) => {
+                    anyhow::bail!("filter delayed {path}")
+                }
+            }
+            converted
+        }
+    })
 }
 
 /// Contents of `path` at `rev`; `None` if the file does not exist there.
@@ -229,7 +268,7 @@ pub fn file_at_revision(repo: &Repo, rev: Revision, path: &str) -> Result<Option
                 Ok(meta) if meta.file_type().is_symlink() => {
                     Ok(Some(std::fs::read_link(&full)?.to_string_lossy().into_owned().into_bytes()))
                 }
-                Ok(meta) if meta.is_file() => Ok(Some(std::fs::read(&full)?)),
+                Ok(meta) if meta.is_file() => Ok(Some(to_git(&local, path, std::fs::read(&full)?)?)),
                 Ok(_) => Ok(None),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
                 Err(e) => Err(e.into()),

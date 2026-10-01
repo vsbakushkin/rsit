@@ -302,7 +302,7 @@ impl CommitPanel {
                 .bg(theme.warning.opacity(0.15))
                 .border_b_1()
                 .border_color(theme.border)
-                .child(div().flex_1().min_w(px(160.)).child(text))
+                .child(div().flex_1().min_w(rems(10.)).child(text))
                 .when(conflicts > 0, |d| {
                     d.child(Button::new("resolve-conflicts").xsmall().primary().label("Resolve…").on_click(
                         cx.listener(|this, _, _, cx| {
@@ -478,7 +478,7 @@ impl CommitPanel {
         let header = div()
             .id(SharedString::from(format!("group-{}", group.id())))
             .test_support()
-            .h(px(ROW_HEIGHT))
+            .h(rems(ROW_HEIGHT / 16.))
             .px_2()
             .flex()
             .items_center()
@@ -532,7 +532,7 @@ impl CommitPanel {
                 .id(SharedString::from(format!("{}:{}", group.id(), path)))
                 .test_support()
                 .group("change-row")
-                .h(px(ROW_HEIGHT))
+                .h(rems(ROW_HEIGHT / 16.))
                 .pl_4()
                 .pr_1()
                 .flex()
@@ -540,7 +540,7 @@ impl CommitPanel {
                 .gap_2()
                 .when(selected, |d| d.bg(active))
                 .when(!selected, |d| d.hover(|s| s.bg(hover)))
-                .child(div().w(px(12.)).text_color(color).child(letter.to_string()))
+                .child(div().w(rems(0.75)).text_color(color).child(letter.to_string()))
                 .child(div().text_color(color).whitespace_nowrap().child(name))
                 .child(div().flex_1().min_w_0().truncate().text_color(muted).child(dir))
                 .children(row_action.map(|icon| {
@@ -688,7 +688,7 @@ impl Render for CommitPanel {
                     .flex()
                     .items_center()
                     .px_2()
-                    .h(px(30.))
+                    .h(rems(1.875))
                     .border_b_1()
                     .border_color(border)
                     .child(div().flex_1().font_weight(FontWeight::SEMIBOLD).child("Commit"))
@@ -716,7 +716,7 @@ impl Render for CommitPanel {
                             cx.listener(|this, checked: &bool, window, cx| this.set_amend(*checked, window, cx)),
                         ),
                     )
-                    .child(div().id("commit-message").test_support().child(Textarea::new(&self.message).h(px(110.))))
+                    .child(div().id("commit-message").test_support().child(Textarea::new(&self.message).h(rems(6.875))))
                     .child(
                         div()
                             .flex()

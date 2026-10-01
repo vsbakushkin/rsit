@@ -16,6 +16,7 @@ use rsit_git::{FileChange, ObjectId, Repo};
 
 use crate::diff_model::{ChangeAction, DiffItem, DiffSide, FileDiff};
 use crate::selection::{SelectableText, SelectionState};
+use crate::settings::{editor_scale, scaled};
 use crate::text::{clip, max_columns};
 
 const CONTEXT: &str = "DiffView";
@@ -69,6 +70,7 @@ pub struct DiffView {
     focus: FocusHandle,
     selection: SelectionState,
     _load: Option<Task<()>>,
+    _theme: Subscription,
 }
 
 /// Opens a diff window for `files` of `commit` (against its first parent), starting at `selected`.
@@ -120,6 +122,7 @@ impl DiffView {
             focus,
             selection: SelectionState::default(),
             _load: None,
+            _theme: crate::settings::observe_highlight_theme(cx, |this, cx| this.load(true, cx)),
         };
         this.select_file(selected, cx);
         this
@@ -402,6 +405,7 @@ impl DiffView {
             return Vec::new();
         };
         let colors = DiffColors::new(cx);
+        let s = colors.scale;
         let words = self.settings.words;
         let current = self.current_change;
         let mono = cx.theme().mono_font_family.clone();
@@ -416,14 +420,14 @@ impl DiffView {
                         div()
                             .id(("fold", ix))
                             .test_support()
-                            .h(px(ROW_HEIGHT))
+                            .h(scaled(ROW_HEIGHT, s))
                             .w_full()
                             .flex()
                             .items_center()
                             .justify_center()
                             .bg(colors.fold_bg)
                             .text_color(colors.muted)
-                            .text_xs()
+                            .text_size(scaled(12., s))
                             .cursor_pointer()
                             .child(format!("⋯ {} unchanged lines", left.len()))
                             .on_click(cx.listener(move |this, _, _, cx| this.expand_fold(start, cx)))
@@ -438,7 +442,7 @@ impl DiffView {
                                     div()
                                         .id(("change-action", fragment))
                                         .test_support()
-                                        .w(px(14.))
+                                        .w(scaled(14., s))
                                         .flex_none()
                                         .h_full()
                                         .flex()
@@ -453,13 +457,13 @@ impl DiffView {
                                         .into_any_element(),
                                 )
                             }
-                            (Some(_), _) => Some(div().w(px(14.)).flex_none().into_any_element()),
+                            (Some(_), _) => Some(div().w(scaled(14., s)).flex_none().into_any_element()),
                             _ => None,
                         };
                         let row_el = div()
                             .id(("line", ix))
                             .test_support()
-                            .h(px(ROW_HEIGHT))
+                            .h(scaled(ROW_HEIGHT, s))
                             .w_full()
                             .flex()
                             .font_family(mono.clone());
@@ -703,7 +707,7 @@ impl DiffView {
                         uniform_list("diff-rows", self.rows.rows.len(), cx.processor(Self::render_rows))
                             .track_scroll(&self.scroll)
                             .size_full()
-                            .text_size(px(13.)),
+                            .text_size(theme.mono_font_size),
                     ),
             )
             .into_any_element()
@@ -777,6 +781,8 @@ struct DiffColors {
     muted: Hsla,
     current: Hsla,
     selection: Hsla,
+    /// Editor font scale, for the gutter.
+    scale: f32,
 }
 
 impl DiffColors {
@@ -784,6 +790,7 @@ impl DiffColors {
     fn new(cx: &App) -> Self {
         let theme = cx.theme();
         let c = |hex: u32| -> Hsla { rgb(hex).into() };
+        let scale = editor_scale(cx);
         if theme.is_dark() {
             Self {
                 inserted: c(0x294436),
@@ -798,6 +805,7 @@ impl DiffColors {
                 muted: theme.muted_foreground,
                 current: c(0x7a9ec2),
                 selection: theme.selection,
+                scale,
             }
         } else {
             Self {
@@ -813,6 +821,7 @@ impl DiffColors {
                 muted: theme.muted_foreground,
                 current: c(0x3574f0),
                 selection: theme.selection,
+                scale,
             }
         }
     }
@@ -836,7 +845,7 @@ impl DiffColors {
 
 fn gutter(line: Option<u32>, change: Option<Change>, current: bool, colors: &DiffColors) -> impl IntoElement {
     div()
-        .w(px(GUTTER))
+        .w(scaled(GUTTER, colors.scale))
         .flex_none()
         .h_full()
         .px_1()
@@ -844,7 +853,7 @@ fn gutter(line: Option<u32>, change: Option<Change>, current: bool, colors: &Dif
         .justify_end()
         .items_center()
         .text_color(colors.muted)
-        .text_xs()
+        .text_size(scaled(12., colors.scale))
         .when_some(change, |d, c| d.bg(colors.line_bg(c.kind)))
         .when(current, |d| d.border_l_2().border_color(colors.current))
         .children(line.map(|l| (l + 1).to_string()))

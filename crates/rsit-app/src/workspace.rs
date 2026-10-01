@@ -114,7 +114,7 @@ impl Workspace {
             .items_center()
             .gap_1()
             .px_2()
-            .h(px(34.))
+            .h(rems(2.125))
             .border_b_1()
             .border_color(border)
             .child(branches)
@@ -143,6 +143,14 @@ impl Workspace {
             )
             .child(div().flex_1())
             .children(activity.map(|a| div().text_color(muted).text_sm().truncate().child(a)))
+            .child(
+                Button::new("settings")
+                    .small()
+                    .ghost()
+                    .icon(IconName::Settings)
+                    .tooltip("Settings (Ctrl+Alt+S)")
+                    .on_click(|_, _, cx| crate::settings::open(cx)),
+            )
     }
 }
 

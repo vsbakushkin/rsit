@@ -16,6 +16,7 @@ use rsit_git::conflicts::{self, ConflictVersions};
 
 use crate::diff_model::{DiffSide, language_for};
 use crate::selection::{SelectableText, SelectionState};
+use crate::settings::{editor_scale, scaled};
 use crate::text::clip;
 
 const CONTEXT: &str = "MergeView";
@@ -64,6 +65,7 @@ pub struct MergeView {
     focus: FocusHandle,
     selection: SelectionState,
     _load: Option<Task<()>>,
+    _theme: Subscription,
 }
 
 /// Opens the merge window for a conflicted `path`.
@@ -102,6 +104,7 @@ impl MergeView {
             focus,
             selection: SelectionState::default(),
             _load: None,
+            _theme: crate::settings::observe_highlight_theme(cx, Self::rehighlight),
         };
         this.load(cx);
         this
@@ -109,6 +112,16 @@ impl MergeView {
 
     pub fn model(&self) -> Option<&MergeModel> {
         self.model.as_ref()
+    }
+
+    fn rehighlight(&mut self, cx: &mut Context<Self>) {
+        let theme = cx.theme().highlight_theme.clone();
+        let language = language_for(&self.path);
+        for side in [&mut self.left, &mut self.right].into_iter().flatten() {
+            side.highlight(language, &theme);
+        }
+        self.rebuild(cx);
+        cx.notify();
     }
 
     fn load(&mut self, cx: &mut Context<Self>) {
@@ -362,6 +375,7 @@ impl MergeView {
         let theme = cx.theme();
         let dark = theme.is_dark();
         let (muted, border, mono) = (theme.muted_foreground, theme.border, theme.mono_font_family.clone());
+        let s = editor_scale(cx);
         let color = |hex_light: u32, hex_dark: u32| -> Hsla { rgb(if dark { hex_dark } else { hex_light }).into() };
         let (changed, inserted, conflict, resolved_bg) = (
             color(0xe6eefa, 0x385570),
@@ -400,7 +414,8 @@ impl MergeView {
             let is_current = chunk.is_some_and(|(i, _, _)| Some(i) == current);
             // per-chunk buttons: >> x on the left, x << on the right
             let controls = |is_left: bool, cx: &mut Context<Self>| -> AnyElement {
-                let base = div().w(px(CONTROLS)).flex_none().h_full().flex().items_center().justify_center().gap_1();
+                let base =
+                    div().w(scaled(CONTROLS, s)).flex_none().h_full().flex().items_center().justify_center().gap_1();
                 let Some((i, c, r)) = chunk.filter(|_| row.chunk_start) else { return base.into_any_element() };
                 let side_changed = match c.kind {
                     ChunkKind::Left => is_left,
@@ -428,14 +443,14 @@ impl MergeView {
             };
             let number = |line: Option<u32>, bg: Option<Hsla>, mark: bool| {
                 div()
-                    .w(px(GUTTER))
+                    .w(scaled(GUTTER, s))
                     .flex_none()
                     .h_full()
                     .px_1()
                     .flex()
                     .justify_end()
                     .items_center()
-                    .text_xs()
+                    .text_size(scaled(12., s))
                     .text_color(muted)
                     .when_some(bg, |d, bg| d.bg(bg))
                     .when(mark, |d| d.border_l_2().border_color(accent))
@@ -446,7 +461,7 @@ impl MergeView {
             out.push(
                 div()
                     .id(("merge-row", ix))
-                    .h(px(ROW_HEIGHT))
+                    .h(scaled(ROW_HEIGHT, s))
                     .w_full()
                     .flex()
                     .font_family(mono.clone())
@@ -571,7 +586,7 @@ impl Render for MergeView {
                         .track_scroll(&self.scroll)
                         .flex_1()
                         .w_full()
-                        .text_size(px(13.)),
+                        .text_size(cx.theme().mono_font_size),
                 )
                 .into_any_element()
         };

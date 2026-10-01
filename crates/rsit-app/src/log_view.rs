@@ -18,6 +18,7 @@ use rsit_git::{FileChange, ObjectId, Ref, RefKind, Repo};
 use rsit_log::{LogData, LogFilter, MetaCache, VisibleGraph};
 
 use crate::graph_paint::{self, ROW_HEIGHT, RowGraph};
+use crate::settings;
 
 const CONTEXT: &str = "LogTable";
 const FILTER_DELAY: Duration = Duration::from_millis(350);
@@ -73,6 +74,8 @@ pub struct LogView {
     /// Branches containing the selected commit; `None` while computing.
     containing: Option<Vec<String>>,
     scroll: UniformListScrollHandle,
+    /// Magnification of the graph in the last rendered rows.
+    graph_scale: f32,
     focus: FocusHandle,
     text_input: Entity<InputState>,
     user_input: Entity<InputState>,
@@ -134,6 +137,7 @@ impl LogView {
             changes: Vec::new(),
             containing: None,
             scroll: UniformListScrollHandle::new(),
+            graph_scale: 1.0,
             focus,
             text_input,
             user_input,
@@ -409,7 +413,9 @@ impl LogView {
             return false;
         };
         let elements = graph.print_row(row);
-        let Some(target) = graph_paint::element_at(&elements, x, y).and_then(graph_paint::arrow_target) else {
+        let Some(target) = graph_paint::element_at(&elements, x / self.graph_scale, y / self.graph_scale)
+            .and_then(graph_paint::arrow_target)
+        else {
             return false;
         };
         self.scroll.scroll_to_item(target as usize, ScrollStrategy::Center);
@@ -426,7 +432,7 @@ impl LogView {
 
     fn page_rows(&self) -> i64 {
         let height = self.scroll.0.borrow().base_handle.bounds().size.height;
-        ((f32::from(height) / ROW_HEIGHT) as i64 - 1).max(1)
+        ((f32::from(height) / (ROW_HEIGHT * self.graph_scale)) as i64 - 1).max(1)
     }
 
     fn copy_hash(&mut self, cx: &mut Context<Self>) {
@@ -456,6 +462,10 @@ impl LogView {
     // ---- rendering ----
 
     fn render_rows(&mut self, range: Range<usize>, _window: &mut Window, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        // rows grow with the font; the graph is magnified to fill them exactly
+        let row_height = settings::scaled(ROW_HEIGHT, settings::ui_scale(cx));
+        let scale = f32::from(row_height) / ROW_HEIGHT;
+        self.graph_scale = scale;
         let Some(graph) = self.graph.as_mut() else {
             return Vec::new();
         };
@@ -463,14 +473,14 @@ impl LogView {
         let theme = cx.theme();
         let (list_active, background, muted, hover) =
             (theme.list_active, theme.background, theme.muted_foreground, theme.list_hover);
-        let min_graph = graph.recommended_width().min(6) as f32 * graph_paint::LANE_WIDTH;
+        let min_graph = graph.recommended_width().min(6) as f32 * graph_paint::LANE_WIDTH * scale;
         let mono = theme.mono_font_family.clone();
         let mut rows = Vec::with_capacity(range.len());
         for row in range {
             let row = row as u32;
             let permanent = graph.permanent_row(row);
             let elements = graph.print_row(row);
-            let graph_width = graph_paint::graph_width(&elements).max(min_graph);
+            let graph_width = (graph_paint::graph_width(&elements) * scale).max(min_graph);
             let selected = self.selected == Some(row);
             let bg = if selected { list_active } else { background };
             let id = data.id(permanent);
@@ -485,7 +495,7 @@ impl LogView {
                 div()
                     .id(("row", row as usize))
                     .test_support()
-                    .h(px(ROW_HEIGHT))
+                    .h(row_height)
                     .w_full()
                     .flex()
                     .items_center()
@@ -515,11 +525,11 @@ impl LogView {
                                     |_, _, _| (),
                                     move |bounds, _, window, _| {
                                         painted.set(Some(bounds));
-                                        graph_paint::paint_row(bounds, row_graph, window)
+                                        graph_paint::paint_row(bounds, row_graph, scale, window)
                                     },
                                 )
                                 .w(px(graph_width))
-                                .h(px(ROW_HEIGHT)),
+                                .h(row_height),
                             )
                             .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                                 let Some(bounds) = painted_for_click.get() else {
@@ -535,12 +545,12 @@ impl LogView {
                     .child(
                         div()
                             .flex_1()
-                            .min_w(px(160.))
+                            .min_w(rems(10.))
                             .flex()
                             .items_center()
                             .gap_1()
                             .overflow_hidden()
-                            .child(div().flex_shrink(1.).min_w(px(60.)).truncate().child(subject))
+                            .child(div().flex_shrink(1.).min_w(rems(3.75)).truncate().child(subject))
                             .child(
                                 div()
                                     .flex()
@@ -553,9 +563,9 @@ impl LogView {
                     )
                     .child(
                         div()
-                            .w(px(160.))
+                            .w(rems(10.))
                             .flex_shrink(1.)
-                            .min_w(px(40.))
+                            .min_w(rems(2.5))
                             .px_2()
                             .truncate()
                             .text_color(muted)
@@ -563,9 +573,9 @@ impl LogView {
                     )
                     .child(
                         div()
-                            .w(px(130.))
+                            .w(rems(8.125))
                             .flex_shrink(1.)
-                            .min_w(px(40.))
+                            .min_w(rems(2.5))
                             .px_2()
                             .truncate()
                             .text_color(muted)
@@ -573,7 +583,7 @@ impl LogView {
                     )
                     .child(
                         div()
-                            .w(px(90.))
+                            .w(rems(5.625))
                             .flex_none()
                             .px_2()
                             .whitespace_nowrap()
@@ -595,9 +605,9 @@ impl LogView {
             let d = div().px_2().truncate().child(label);
             match w {
                 // the hash keeps its width; author and date give way to the subject
-                Some(w) if label == "Hash" => d.w(px(w)).flex_none(),
-                Some(w) => d.w(px(w)).flex_shrink(1.).min_w(px(40.)),
-                None => d.flex_1().min_w(px(160.)),
+                Some(w) if label == "Hash" => d.w(rems(w / 16.)).flex_none(),
+                Some(w) => d.w(rems(w / 16.)).flex_shrink(1.).min_w(rems(2.5)),
+                None => d.flex_1().min_w(rems(10.)),
             }
         };
         let empty_message = match &self.graph {
@@ -625,7 +635,7 @@ impl LogView {
             .child(
                 div()
                     .flex()
-                    .h(px(ROW_HEIGHT + 2.0))
+                    .h(rems((ROW_HEIGHT + 2.0) / 16.))
                     .items_center()
                     .border_b_1()
                     .border_color(theme.border)
@@ -685,7 +695,7 @@ impl LogView {
             .py_1()
             .border_b_1()
             .border_color(border)
-            .child(div().w(px(280.)).child(Input::new(&self.text_input).cleanable(true)))
+            .child(div().w(rems(17.5)).child(Input::new(&self.text_input).cleanable(true)))
             .child(
                 Button::new("regex").small().ghost().label(".*").toggled(self.filter.regex).tooltip("Regex").on_click(
                     cx.listener(|this, _, _, cx| {
@@ -708,8 +718,8 @@ impl LogView {
                         this.set_filter(filter, cx);
                     })),
             )
-            .child(div().w(px(150.)).child(Input::new(&self.user_input).cleanable(true)))
-            .child(div().w(px(200.)).child(Input::new(&self.paths_input).cleanable(true)))
+            .child(div().w(rems(9.375)).child(Input::new(&self.user_input).cleanable(true)))
+            .child(div().w(rems(12.5)).child(Input::new(&self.paths_input).cleanable(true)))
             .children(branch_chip)
             .when(!self.filter.is_empty(), |d| {
                 d.child(
@@ -757,7 +767,7 @@ impl LogView {
                         div()
                             .id(SharedString::from(format!("ref-{}", r.full_name)))
                             .px_3()
-                            .h(px(ROW_HEIGHT))
+                            .h(rems(ROW_HEIGHT / 16.))
                             .flex()
                             .items_center()
                             .gap_1()
@@ -803,13 +813,13 @@ impl LogView {
             };
             div()
                 .id(("file", i))
-                .h(px(ROW_HEIGHT))
+                .h(rems(ROW_HEIGHT / 16.))
                 .px_2()
                 .flex()
                 .items_center()
                 .gap_2()
                 .hover(|s| s.bg(hover))
-                .child(div().w(px(12.)).text_color(color).child(letter.to_string()))
+                .child(div().w(rems(0.75)).text_color(color).child(letter.to_string()))
                 .child(div().text_color(color).child(name))
                 .child(div().flex_1().min_w_0().truncate().text_color(muted).child(dir))
                 .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {

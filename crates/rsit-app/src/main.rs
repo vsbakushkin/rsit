@@ -101,6 +101,7 @@ fn main() {
 
     gpui_kit::application().with_assets(rsit_app::AppAssets).run(move |cx| {
         rsit_app::init(cx);
+        rsit_app::settings::load(cx);
         if let Some(path) = merge {
             cx.on_window_closed(|cx, _| {
                 if cx.windows().is_empty() {

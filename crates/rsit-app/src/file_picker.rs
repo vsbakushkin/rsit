@@ -133,7 +133,7 @@ impl Render for FilePicker {
                 div()
                     .id(("file-match", row))
                     .test_support()
-                    .h(px(24.))
+                    .h(rems(1.5))
                     .px_2()
                     .flex()
                     .items_center()
@@ -168,7 +168,7 @@ impl Render for FilePicker {
             .flex_col()
             .gap_2()
             .child(Input::new(&self.input).id("file-query"))
-            .child(div().id("file-matches").h(px(380.)).overflow_y_scroll().children(items))
+            .child(div().id("file-matches").h(rems(23.75)).overflow_y_scroll().children(items))
             .child(div().text_xs().text_color(muted).child("Enter: Annotate · Ctrl+Enter: History"))
     }
 }

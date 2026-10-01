@@ -8,3 +8,8 @@ licensed under the Apache License, Version 2.0:
   - crates/rsit-graph/tests/data: test data from platform/vcs-log/graph/testData
   - crates/rsit-git/src/refs.rs: ref ordering from plugins/git4idea (GitRefManager)
   - crates/rsit-app/src/graph_paint.rs: port of platform/vcs-log/impl SimpleGraphCellPainter
+
+This product contains color themes from gpui-component
+(https://github.com/longbridge/gpui-component), licensed under the Apache
+License, Version 2.0:
+  - crates/rsit-app/themes

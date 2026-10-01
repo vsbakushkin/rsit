@@ -16,6 +16,7 @@ pub mod merge_view;
 pub mod navigator;
 pub mod rebase_view;
 pub mod selection;
+pub mod settings;
 pub mod tasks;
 pub mod text;
 pub mod workspace;
@@ -23,6 +24,7 @@ pub mod workspace;
 /// Initializes gpui-kit and rsit key bindings.
 pub fn init(cx: &mut gpui_kit::App) {
     gpui_kit::init(cx);
+    settings::init(cx);
     log_view::init(cx);
     diff_view::init(cx);
     commit_panel::init(cx);
@@ -34,7 +36,7 @@ pub fn init(cx: &mut gpui_kit::App) {
     blame_view::init(cx);
 }
 
-gpui_kit::assets::icon_assets!(ExtraIcons, [GitBranch, ArrowDownToLine, ArrowUpFromLine]);
+gpui_kit::assets::icon_assets!(ExtraIcons, [GitBranch, ArrowDownToLine, ArrowUpFromLine, Settings]);
 
 /// gpui-kit's component icons plus the extra Lucide icons rsit uses.
 pub struct AppAssets;

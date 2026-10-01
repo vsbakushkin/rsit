@@ -6900,6 +6900,8 @@ dependencies = [
  "rsit-git",
  "rsit-graph",
  "rsit-log",
+ "serde",
+ "serde_json",
  "tempfile",
 ]
 

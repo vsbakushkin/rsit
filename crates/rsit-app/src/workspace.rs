@@ -1,9 +1,13 @@
 //! Main window: a toolbar with the branch widget and remote actions, the
 //! Commit tool window on the left (Alt+0) and the Log.
 
+use std::path::{Path, PathBuf};
+
 use gpui_kit::assets::IconName;
+use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
+use gpui_kit::component::notification::Notification;
 use gpui_kit::component::resizable::{h_resizable, resizable_panel};
 use gpui_kit::component::{ActiveTheme as _, Sizable as _};
 use gpui_kit::*;
@@ -27,6 +31,88 @@ pub fn init(cx: &mut App) {
     ]);
 }
 
+/// Open main windows: the app quits when the last one closes, other windows are secondary.
+#[derive(Default)]
+struct MainWindows(Vec<WindowId>);
+
+impl Global for MainWindows {}
+
+/// Opens a main window for `repo`. `watch: false` disables file system watching (for tests).
+pub fn open(repo: Repo, filter: LogFilter, watch: bool, cx: &mut App) {
+    if let Some(dir) = repo.workdir().map(Path::to_path_buf) {
+        crate::welcome::Recent::add(&dir);
+    }
+    let title = format!("{} — rsit", repo.display_name());
+    let options = WindowOptions {
+        titlebar: Some(TitlebarOptions { title: Some(title.into()), ..Default::default() }),
+        window_bounds: Some(WindowBounds::centered(size(px(1500.), px(900.)), cx)),
+        app_id: Some("rsit".into()),
+        ..Default::default()
+    };
+    let (main_window, _) =
+        gpui_kit::open_window(options, cx, |window, cx| cx.new(|cx| Workspace::new(repo, filter, watch, window, cx)))
+            .expect("failed to open window");
+    let id = main_window.window_id();
+    cx.default_global::<MainWindows>().0.push(id);
+    cx.on_window_closed(move |cx, closed| {
+        if closed != id {
+            return;
+        }
+        let mains = &mut cx.default_global::<MainWindows>().0;
+        mains.retain(|w| *w != id);
+        if mains.is_empty() {
+            cx.quit();
+        }
+    })
+    .detach();
+}
+
+/// Replaces the repository of the main `window` with the one at `dir`.
+pub fn switch_repo(dir: &Path, watch: bool, window: &mut Window, cx: &mut App) {
+    match Repo::discover(dir) {
+        Ok(repo) => {
+            // the new window opens first, so closing this one does not quit
+            open(repo, LogFilter::default(), watch, cx);
+            window.remove_window();
+        }
+        Err(e) => window.push_notification(Notification::error(format!("{e:#}")), cx),
+    }
+}
+
+/// Lets the user pick a folder and switches the main `window` to its repository.
+fn pick_repo(watch: bool, window: &mut Window, cx: &mut App) {
+    let picked = crate::welcome::pick_folder(cx);
+    let handle = window.window_handle();
+    cx.spawn(async move |cx| {
+        let picked = picked.await;
+        handle
+            .update(cx, |_, window, cx| match picked {
+                Ok(Some(dir)) => switch_repo(&dir, watch, window, cx),
+                Ok(None) => {}
+                Err(e) => window.push_notification(Notification::error(format!("{e:#}")), cx),
+            })
+            .ok();
+    })
+    .detach();
+}
+
+/// The repository popup: recent repositories and Open….
+fn repos_popup(menu: PopupMenu, current: &Path, watch: bool) -> PopupMenu {
+    let mut menu = menu.item(PopupMenuItem::new("Open…").on_click(move |_, window, cx| pick_repo(watch, window, cx)));
+    let recent: Vec<PathBuf> = crate::welcome::Recent::load().into_iter().filter(|d| d != current).collect();
+    if !recent.is_empty() {
+        menu = menu.separator().label("Recent");
+    }
+    for dir in recent {
+        let name = dir.file_name().map_or_else(|| dir.display().to_string(), |n| n.to_string_lossy().into_owned());
+        menu = menu.item(
+            PopupMenuItem::new(format!("{name}  —  {}", dir.display()))
+                .on_click(move |_, window, cx| switch_repo(&dir, watch, window, cx)),
+        );
+    }
+    menu
+}
+
 #[derive(Clone, Default)]
 struct BranchInfo {
     current: Option<String>,
@@ -39,6 +125,8 @@ pub struct Workspace {
     pub log: Entity<LogView>,
     pub commit: Entity<CommitPanel>,
     show_commit: bool,
+    /// Whether the file system is watched (off in tests); kept for switched repositories.
+    watch: bool,
     branch: BranchInfo,
     _branch_task: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
@@ -59,6 +147,7 @@ impl Workspace {
             log,
             commit,
             show_commit: true,
+            watch,
             branch: BranchInfo::default(),
             _branch_task: None,
             _subscriptions: subscriptions,
@@ -97,6 +186,14 @@ impl Workspace {
                 label.push_str(&format!(" ↓{behind}"));
             }
         }
+        let (current, watch) = (self.repo.cwd().to_path_buf(), self.watch);
+        let repos = Button::new("repos")
+            .small()
+            .ghost()
+            .label(self.repo.display_name())
+            .tooltip("Open another repository")
+            .dropdown_caret(true)
+            .dropdown_menu(move |menu, _, _| repos_popup(menu, &current, watch));
         let repo = self.repo.clone();
         let branches = Button::new("branches")
             .small()
@@ -117,6 +214,7 @@ impl Workspace {
             .h(rems(2.125))
             .border_b_1()
             .border_color(border)
+            .child(repos)
             .child(branches)
             .child(
                 action("fetch", IconName::RefreshCw, "Fetch")

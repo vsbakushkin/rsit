@@ -2,15 +2,16 @@
 //! log, the index (staging) refreshes local changes.
 
 use std::path::Path;
+use std::time::Duration;
 
 use anyhow::Result;
 use futures::channel::mpsc::{UnboundedReceiver, unbounded};
-use notify::{RecommendedWatcher, RecursiveMode, Watcher as _};
+use notify::{PollWatcher, RecursiveMode, Watcher};
 use rsit_git::Repo;
 
 /// Keeps the file system watch alive; drop it to stop watching.
 pub struct RefsWatcher {
-    _watcher: RecommendedWatcher,
+    _watcher: Box<dyn Watcher + Send>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,7 +44,7 @@ pub fn watch_repo(repo: &Repo) -> Result<(RefsWatcher, UnboundedReceiver<RepoEve
             }
         }
     };
-    let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+    let handler = move |event: notify::Result<notify::Event>| {
         let Ok(event) = event else { return };
         if event.kind.is_access() {
             return;
@@ -54,7 +55,14 @@ pub fn watch_repo(repo: &Repo) -> Result<(RefsWatcher, UnboundedReceiver<RepoEve
                 tx.unbounded_send(kind).ok();
             }
         }
-    })?;
+    };
+    // a WSL share delivers no change notifications for writes made inside Linux
+    let mut watcher: Box<dyn Watcher + Send> = if rsit_git::wsl::WslPath::parse(&git_dir).is_some() {
+        let config = notify::Config::default().with_poll_interval(Duration::from_secs(1));
+        Box::new(PollWatcher::new(handler, config)?)
+    } else {
+        Box::new(notify::recommended_watcher(handler)?)
+    };
     watcher.watch(&git_dir, RecursiveMode::NonRecursive)?;
     if common_dir != git_dir {
         watcher.watch(&common_dir, RecursiveMode::NonRecursive)?;

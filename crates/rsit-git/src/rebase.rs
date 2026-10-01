@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result, bail};
 
 use crate::ObjectId;
-use crate::cli::{git, run};
+use crate::cli::{self, git, run};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
@@ -142,13 +142,13 @@ impl RebasePlan {
         parts.join("\n\n")
     }
 
-    /// The todo list for git, writing new messages into `dir`.
-    pub fn todo(&self, dir: &Path) -> Result<String> {
+    /// The todo list for git running in `cwd`, writing new messages into `dir`.
+    pub fn todo(&self, cwd: &Path, dir: &Path) -> Result<String> {
         let mut todo = String::new();
         let mut pending_message: Option<PathBuf> = None;
         let flush = |todo: &mut String, pending: &mut Option<PathBuf>| {
             if let Some(file) = pending.take() {
-                let quoted = sh_quote(&file);
+                let quoted = sh_quote(cwd, &file);
                 todo.push_str(&format!("exec git commit --amend --only --allow-empty --cleanup=strip -F {quoted}\n"));
             }
         };
@@ -178,12 +178,10 @@ impl RebasePlan {
     }
 }
 
-/// `path` as one single-quoted word for the shell git runs editors and `exec`
-/// lines in; Git for Windows' shell takes `C:/dir` more reliably than `C:\dir`.
-fn sh_quote(path: &Path) -> String {
-    let path = path.display().to_string();
-    let path = if cfg!(windows) { path.replace('\\', "/") } else { path };
-    format!("'{}'", path.replace('\'', "'\\''"))
+/// `path` as one single-quoted word for the shell git running in `cwd` starts
+/// editors and `exec` lines in.
+fn sh_quote(cwd: &Path, path: &Path) -> String {
+    format!("'{}'", cli::to_git_path(cwd, path).replace('\'', "'\\''"))
 }
 
 /// Runs the rebase. Returns when git finished or stopped (edit, conflicts):
@@ -197,12 +195,12 @@ pub fn run_interactive(cwd: &Path, plan: &RebasePlan) -> Result<String> {
     static RUN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let run_id = RUN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
-    let dir = std::env::temp_dir().join(format!("rsit-rebase-{}-{run_id}-{nanos}", std::process::id()));
+    let dir = cli::temp_dir(cwd).join(format!("rsit-rebase-{}-{run_id}-{nanos}", std::process::id()));
     std::fs::create_dir_all(&dir)?;
     let todo_file = dir.join("todo");
-    std::fs::write(&todo_file, plan.todo(&dir)?)?;
+    std::fs::write(&todo_file, plan.todo(cwd, &dir)?)?;
     let mut cmd = git(cwd);
-    cmd.env("GIT_SEQUENCE_EDITOR", format!("cp {}", sh_quote(&todo_file)))
+    cmd.env("GIT_SEQUENCE_EDITOR", format!("cp {}", sh_quote(cwd, &todo_file)))
         .args(["-c", "rebase.abbreviateCommands=false", "-c", "rebase.missingCommitsCheck=ignore"])
         .args(["rebase", "--interactive", "--autostash"]);
     match plan.base {
@@ -212,8 +210,9 @@ pub fn run_interactive(cwd: &Path, plan: &RebasePlan) -> Result<String> {
     let out = cmd.output()?;
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     // keep the messages while the rebase is stopped (its exec lines still need them)
-    let stopped =
-        run(cwd, &["rev-parse", "--git-path", "rebase-merge"]).map(|p| cwd.join(p.trim()).exists()).unwrap_or(true);
+    let stopped = run(cwd, &["rev-parse", "--git-path", "rebase-merge"])
+        .map(|p| cli::from_git_path(cwd, p.trim()).exists())
+        .unwrap_or(true);
     if !stopped {
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -252,7 +251,7 @@ mod tests {
             ],
         };
         plan.entries[0].new_message = Some("new".into());
-        let todo = plan.todo(dir.path()).unwrap();
+        let todo = plan.todo(dir.path(), dir.path()).unwrap();
         let lines: Vec<&str> = todo.lines().map(|l| l.split(' ').next().unwrap()).collect();
         assert_eq!(lines, ["pick", "squash", "drop", "exec", "edit"]);
         assert!(todo.contains("message-0.txt"));

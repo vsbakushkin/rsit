@@ -18,8 +18,14 @@ pub fn git(cwd: &Path) -> Command {
         .arg("-c")
         .arg("core.quotepath=false")
         .stdin(Stdio::null());
+    // a GUI process has no console, so Windows would open one for every git call
+    #[cfg(windows)]
+    std::os::windows::process::CommandExt::creation_flags(&mut cmd, CREATE_NO_WINDOW);
     cmd
 }
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// Runs git and returns stdout, failing with stderr on a non-zero exit.
 pub fn run(cwd: &Path, args: &[&str]) -> Result<String> {

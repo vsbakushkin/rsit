@@ -148,8 +148,8 @@ impl RebasePlan {
         let mut pending_message: Option<PathBuf> = None;
         let flush = |todo: &mut String, pending: &mut Option<PathBuf>| {
             if let Some(file) = pending.take() {
-                let quoted = file.display().to_string().replace('\'', "'\\''");
-                todo.push_str(&format!("exec git commit --amend --only --allow-empty --cleanup=strip -F '{quoted}'\n"));
+                let quoted = sh_quote(&file);
+                todo.push_str(&format!("exec git commit --amend --only --allow-empty --cleanup=strip -F {quoted}\n"));
             }
         };
         for (i, e) in self.entries.iter().enumerate() {
@@ -178,6 +178,14 @@ impl RebasePlan {
     }
 }
 
+/// `path` as one single-quoted word for the shell git runs editors and `exec`
+/// lines in; Git for Windows' shell takes `C:/dir` more reliably than `C:\dir`.
+fn sh_quote(path: &Path) -> String {
+    let path = path.display().to_string();
+    let path = if cfg!(windows) { path.replace('\\', "/") } else { path };
+    format!("'{}'", path.replace('\'', "'\\''"))
+}
+
 /// Runs the rebase. Returns when git finished or stopped (edit, conflicts):
 /// a stop is reported as an error carrying git's message.
 pub fn run_interactive(cwd: &Path, plan: &RebasePlan) -> Result<String> {
@@ -193,9 +201,8 @@ pub fn run_interactive(cwd: &Path, plan: &RebasePlan) -> Result<String> {
     std::fs::create_dir_all(&dir)?;
     let todo_file = dir.join("todo");
     std::fs::write(&todo_file, plan.todo(&dir)?)?;
-    let quoted = todo_file.display().to_string().replace('\'', "'\\''");
     let mut cmd = git(cwd);
-    cmd.env("GIT_SEQUENCE_EDITOR", format!("cp '{quoted}'"))
+    cmd.env("GIT_SEQUENCE_EDITOR", format!("cp {}", sh_quote(&todo_file)))
         .args(["-c", "rebase.abbreviateCommands=false", "-c", "rebase.missingCommitsCheck=ignore"])
         .args(["rebase", "--interactive", "--autostash"]);
     match plan.base {

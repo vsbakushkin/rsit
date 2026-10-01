@@ -110,6 +110,7 @@ pub fn accept_side(repo: &Repo, path: &str, ours: bool) -> Result<()> {
 /// Writes the merged text and marks the file resolved.
 pub fn save_resolved(repo: &Repo, path: &str, content: &str) -> Result<()> {
     let workdir = repo.workdir().context("bare repository")?;
+    let content = crate::to_worktree(&repo.local(), path, content.as_bytes())?;
     std::fs::write(workdir.join(path), content).with_context(|| format!("cannot write {path}"))?;
     run(repo.cwd(), &["add", "--", path])?;
     Ok(())

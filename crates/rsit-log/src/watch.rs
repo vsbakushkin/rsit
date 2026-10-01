@@ -24,7 +24,7 @@ pub enum RepoEvent {
 /// Sends an event whenever refs or the index change.
 pub fn watch_repo(repo: &Repo) -> Result<(RefsWatcher, UnboundedReceiver<RepoEvent>)> {
     let (tx, rx) = unbounded();
-    let absolute = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    let absolute = |p: &Path| rsit_git::dirs::canonical(p).unwrap_or_else(|_| p.to_path_buf());
     let git_dir = absolute(repo.git_dir());
     let common_dir = absolute(repo.common_dir());
     let refs_dir = common_dir.join("refs");

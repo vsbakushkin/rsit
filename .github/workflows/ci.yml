@@ -26,8 +26,12 @@ jobs:
       - run: cargo fmt --all --check
 
   test:
-    name: Build, test and lint
-    runs-on: ubuntu-latest
+    name: Test on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -36,8 +40,10 @@ jobs:
           components: clippy
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: rui314/setup-mold@v1
+        if: runner.os == 'Linux'
       # gpui's Linux dependencies (same list as gpui-component's CI)
       - name: Install system dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libfontconfig-dev libwayland-dev libxkbcommon-x11-dev \
@@ -47,15 +53,37 @@ jobs:
       # same job as the build so clippy reuses its dependencies
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+  # the check main's ruleset requires; matrix jobs report under per-OS names,
+  # so this one passes only when every OS did
+  test-result:
+    name: Build, test and lint
+    needs: test
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: test "${{ needs.test.result }}" = success
+
   # every merge to main that passes the checks becomes release v0.1.N
-  release:
-    name: Release
+  version:
+    name: Next version
     needs: [fmt, test]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Next version
+        id: version
+        run: |
+          last=$(git ls-remote --tags origin 'refs/tags/v0.1.*' | sed 's|.*refs/tags/v0\.1\.||' | grep -E '^[0-9]+$' | sort -n | tail -1)
+          echo "version=0.1.$(( ${last:-0} + 1 ))" >> "$GITHUB_OUTPUT"
+
+  build-linux:
+    name: Package for Linux
+    needs: version
     # the oldest supported runner, so the binary runs on glibc 2.35 and newer
     runs-on: ubuntu-22.04
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -65,31 +93,67 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libfontconfig-dev libwayland-dev libxkbcommon-x11-dev \
             libx11-xcb-dev libssl-dev libzstd-dev libvulkan1
-      - name: Next version
-        id: version
-        run: |
-          last=$(git ls-remote --tags origin 'refs/tags/v0.1.*' | sed 's|.*refs/tags/v0\.1\.||' | grep -E '^[0-9]+$' | sort -n | tail -1)
-          echo "version=0.1.$(( ${last:-0} + 1 ))" >> "$GITHUB_OUTPUT"
       - name: Build
         run: cargo build --release --locked -p rsit-app
         env:
-          RSIT_VERSION: ${{ steps.version.outputs.version }}
+          RSIT_VERSION: ${{ needs.version.outputs.version }}
       - name: Install appimagetool
         run: |
           curl -fsSL -o "$RUNNER_TEMP/appimagetool" \
             https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
           chmod +x "$RUNNER_TEMP/appimagetool"
       - name: Package
-        run: script/package-linux.sh "v${{ steps.version.outputs.version }}"
+        run: script/package-linux.sh "v${{ needs.version.outputs.version }}"
         env:
           APPIMAGETOOL: ${{ runner.temp }}/appimagetool
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: |
+            dist/*.tar.gz
+            dist/*.AppImage
+
+  build-windows:
+    name: Package for Windows
+    needs: version
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Build
+        run: cargo build --release --locked -p rsit-app
+        env:
+          RSIT_VERSION: ${{ needs.version.outputs.version }}
+      - name: Package
+        run: script/package-windows.ps1 "v${{ needs.version.outputs.version }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*.zip
+
+  release:
+    name: Release
+    needs: [version, build-linux, build-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: v${{ steps.version.outputs.version }}
+          VERSION: v${{ needs.version.outputs.version }}
         run: |
-          gh release create "$VERSION" dist/*.tar.gz dist/*.AppImage \
+          gh release create "$VERSION" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "rsit $VERSION" \
             --generate-notes \
-            --notes "Linux x86_64, needs \`git\` installed. **AppImage**: \`chmod +x\` it and run it inside a repository. **tar.gz**: unpack and run \`./rsit\`, or \`./install.sh\` to put it into ~/.local/bin with a desktop entry."
+            --notes "Needs \`git\` installed.
+
+          **Windows** x86_64: unpack the zip and run \`rsit.exe\` (pass a repository path, or pick one in the Welcome window).
+
+          **Linux** x86_64. **AppImage**: \`chmod +x\` it and run it inside a repository. **tar.gz**: unpack and run \`./rsit\`, or \`./install.sh\` to put it into ~/.local/bin with a desktop entry."

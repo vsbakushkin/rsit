@@ -11,13 +11,12 @@ use rsit_git::{CommitGraphData, Repo};
 
 const GRAPH_MAGIC: &[u8; 8] = b"RSITGR02";
 
-/// Cache directory of a repository: `$XDG_CACHE_HOME/rsit/<hash of the common dir>`.
+/// Cache directory of a repository: `<cache dir>/<hash of the common dir>`,
+/// see [`rsit_git::dirs::cache_dir`].
 pub fn cache_dir(repo: &Repo) -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))?;
-    let key = repo.common_dir().canonicalize().unwrap_or_else(|_| repo.common_dir().to_path_buf());
-    Some(base.join("rsit").join(format!("{:016x}", fnv1a(key.as_os_str().as_encoded_bytes()))))
+    let base = rsit_git::dirs::cache_dir()?;
+    let key = rsit_git::dirs::canonical(repo.common_dir()).unwrap_or_else(|_| repo.common_dir().to_path_buf());
+    Some(base.join(format!("{:016x}", fnv1a(key.as_os_str().as_encoded_bytes()))))
 }
 
 fn fnv1a(bytes: &[u8]) -> u64 {

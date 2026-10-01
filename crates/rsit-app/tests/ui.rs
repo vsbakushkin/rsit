@@ -399,7 +399,8 @@ async fn merge_conflict_banner_aborts(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert!(!p.join(".git/MERGE_HEAD").exists(), "merge aborted");
     cx.update_window(window, |_, window, _| assert!(window.try_find("operation-banner").is_none())).unwrap();
-    assert_eq!(std::fs::read_to_string(p.join("f")).unwrap(), "main\n");
+    // written by git, so CRLF under core.autocrlf=true (Git for Windows' default)
+    assert_eq!(std::fs::read_to_string(p.join("f")).unwrap().replace("\r\n", "\n"), "main\n");
 }
 
 #[gpui_kit::test]
@@ -644,7 +645,8 @@ async fn merge_window_resolves_and_stages(cx: &mut TestAppContext) {
     cx.update_window(window, |_, window, cx| window.click("apply-merge", cx)).unwrap();
     cx.run_until_parked();
 
-    let merged = std::fs::read_to_string(p.join("f")).unwrap();
+    // with core.autocrlf=true the result is saved with CRLF, like a checkout
+    let merged = std::fs::read_to_string(p.join("f")).unwrap().replace("\r\n", "\n");
     let expected = base
         .replace("line 2\n", "line 2 theirs\n")
         .replace("line 6\n", "line 6 ours\n")

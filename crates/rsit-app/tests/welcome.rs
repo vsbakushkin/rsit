@@ -124,7 +124,7 @@ fn press(cx: &mut TestAppContext, window: gpui_kit::AnyWindowHandle, key: &str) 
 }
 
 fn canonical(path: &Path) -> PathBuf {
-    path.canonicalize().unwrap()
+    rsit_git::dirs::canonical(path).unwrap()
 }
 
 #[gpui_kit::test]

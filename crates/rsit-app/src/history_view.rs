@@ -127,7 +127,7 @@ impl HistoryView {
                 div()
                     .id(("revision", i))
                     .test_support()
-                    .h(px(ROW_HEIGHT))
+                    .h(rems(ROW_HEIGHT / 16.))
                     .w_full()
                     .flex()
                     .items_center()
@@ -135,7 +135,7 @@ impl HistoryView {
                     .when(!selected, |d| d.hover(|s| s.bg(hover)))
                     .child(
                         div()
-                            .w(px(84.))
+                            .w(rems(5.25))
                             .flex_none()
                             .px_2()
                             .whitespace_nowrap()
@@ -146,7 +146,7 @@ impl HistoryView {
                     )
                     .child(
                         div()
-                            .w(px(90.))
+                            .w(rems(5.625))
                             .flex_none()
                             .px_1()
                             .whitespace_nowrap()
@@ -155,9 +155,9 @@ impl HistoryView {
                     )
                     .child(
                         div()
-                            .w(px(130.))
+                            .w(rems(8.125))
                             .flex_shrink(1.)
-                            .min_w(px(40.))
+                            .min_w(rems(2.5))
                             .px_1()
                             .truncate()
                             .text_color(muted)
@@ -166,7 +166,7 @@ impl HistoryView {
                     .child(
                         div()
                             .flex_1()
-                            .min_w(px(100.))
+                            .min_w(rems(6.25))
                             .px_1()
                             .flex()
                             .gap_2()

@@ -29,11 +29,13 @@ pub struct RowGraph {
     pub background: Hsla,
 }
 
-pub fn paint_row(bounds: Bounds<Pixels>, row: RowGraph, window: &mut Window) {
+/// Paints `row` into `bounds`; the geometry is laid out for [`ROW_HEIGHT`] and
+/// magnified by `scale`, which follows the font size.
+pub fn paint_row(bounds: Bounds<Pixels>, row: RowGraph, scale: f32, window: &mut Window) {
     let origin = bounds.origin;
     let row_center = (ROW_HEIGHT / 2.0).floor();
     let element_center = (LANE_WIDTH / 2.0).floor();
-    let point = |x: f32, y: f32| origin + gpui_kit::point(px(x), px(y));
+    let point = |x: f32, y: f32| origin + gpui_kit::point(px(x * scale), px(y * scale));
 
     window.with_content_mask(Some(ContentMask { bounds }), |window| {
         for element in &row.elements {
@@ -46,25 +48,25 @@ pub fn paint_row(bounds: Bounds<Pixels>, row: RowGraph, window: &mut Window) {
                     let down = dir == EdgeDir::Down;
                     if other_pos == element.pos {
                         let y2 = if down { ROW_HEIGHT } else { 0.0 };
-                        line(window, point(x1, y1), point(x1, y2), color, element.dashed());
+                        line(window, point(x1, y1), point(x1, y2), color, element.dashed(), scale);
                         if arrow {
-                            arrow_head(window, (x1, y1), (x1, y2), point, color);
+                            arrow_head(window, (x1, y1), (x1, y2), point, color, scale);
                         }
                     } else {
                         // twice as long as the half-row so neighbouring rows dock
                         let x2 = LANE_WIDTH * other_pos as f32 + element_center;
                         let y2 = if down { ROW_HEIGHT + row_center } else { row_center - ROW_HEIGHT };
-                        line(window, point(x1, y1), point(x2, y2), color, element.dashed());
+                        line(window, point(x1, y1), point(x2, y2), color, element.dashed(), scale);
                         if arrow {
-                            arrow_head(window, (x1, y1), ((x1 + x2) / 2.0, (y1 + y2) / 2.0), point, color);
+                            arrow_head(window, (x1, y1), ((x1 + x2) / 2.0, (y1 + y2) / 2.0), point, color, scale);
                         }
                     }
                 }
                 PrintKind::Terminal { dir } => {
                     let gap = CIRCLE_RADIUS / 2.0 + 1.0;
                     let y2 = if dir == EdgeDir::Down { ROW_HEIGHT - gap } else { gap };
-                    line(window, point(x1, y1), point(x1, y2), color, element.dashed());
-                    arrow_head(window, (x1, y1), (x1, y2), point, color);
+                    line(window, point(x1, y1), point(x1, y2), color, element.dashed(), scale);
+                    arrow_head(window, (x1, y1), (x1, y2), point, color, scale);
                 }
             }
         }
@@ -74,22 +76,22 @@ pub fn paint_row(bounds: Bounds<Pixels>, row: RowGraph, window: &mut Window) {
             if row.is_head {
                 // outer ring in the node color, a gap in the background, then the node
                 let outer = CIRCLE_RADIUS + HEAD_RADIUS_DELTA;
-                circle(window, center, outer, color);
-                circle(window, center, outer - HEAD_RADIUS_DELTA / 2.0 - 0.5, row.background);
-                circle(window, center, CIRCLE_RADIUS - 1.0, color);
+                circle(window, center, outer * scale, color);
+                circle(window, center, (outer - HEAD_RADIUS_DELTA / 2.0 - 0.5) * scale, row.background);
+                circle(window, center, (CIRCLE_RADIUS - 1.0) * scale, color);
             } else {
-                circle(window, center, CIRCLE_RADIUS, color);
+                circle(window, center, CIRCLE_RADIUS * scale, color);
             }
         }
     });
 }
 
-fn line(window: &mut Window, from: Point<Pixels>, to: Point<Pixels>, color: Hsla, dashed: bool) {
+fn line(window: &mut Window, from: Point<Pixels>, to: Point<Pixels>, color: Hsla, dashed: bool, scale: f32) {
     if dashed {
-        dashed_line(window, from, to, color);
+        dashed_line(window, from, to, color, scale);
         return;
     }
-    let mut path = PathBuilder::stroke(px(LINE));
+    let mut path = PathBuilder::stroke(px(LINE * scale));
     path.move_to(from);
     path.line_to(to);
     if let Ok(path) = path.build() {
@@ -97,15 +99,15 @@ fn line(window: &mut Window, from: Point<Pixels>, to: Point<Pixels>, color: Hsla
     }
 }
 
-fn dashed_line(window: &mut Window, from: Point<Pixels>, to: Point<Pixels>, color: Hsla) {
+fn dashed_line(window: &mut Window, from: Point<Pixels>, to: Point<Pixels>, color: Hsla, scale: f32) {
     let (dx, dy) = (f32::from(to.x - from.x), f32::from(to.y - from.y));
     let len = dx.hypot(dy);
     if len == 0.0 {
         return;
     }
-    let (dash, gap) = (3.0, 3.0);
+    let (dash, gap) = (3.0 * scale, 3.0 * scale);
     let mut t = 0.0;
-    let mut path = PathBuilder::stroke(px(LINE));
+    let mut path = PathBuilder::stroke(px(LINE * scale));
     while t < len {
         let end = (t + dash).min(len);
         path.move_to(from + gpui_kit::point(px(dx * t / len), px(dy * t / len)));
@@ -124,6 +126,7 @@ fn arrow_head(
     tip: (f32, f32),
     point: impl Fn(f32, f32) -> Point<Pixels>,
     color: Hsla,
+    scale: f32,
 ) {
     let (tx, ty) = (from.0 - tip.0, from.1 - tip.1);
     let d = tx.hypot(ty);
@@ -136,7 +139,7 @@ fn arrow_head(
     let sin = (1.0 - ARROW_ANGLE_COS2).sqrt();
     for sin in [sin, -sin] {
         let (rx, ry) = (sx * cos - sy * sin, sx * sin + sy * cos);
-        let mut path = PathBuilder::stroke(px(LINE));
+        let mut path = PathBuilder::stroke(px(LINE * scale));
         path.move_to(point(tip.0, tip.1));
         path.line_to(point(tip.0 + rx, tip.1 + ry));
         if let Ok(path) = path.build() {
@@ -151,8 +154,8 @@ fn circle(window: &mut Window, center: Point<Pixels>, radius: f32, color: Hsla) 
     window.paint_quad(fill(bounds, color).corner_radii(r));
 }
 
-/// Element under a point in row-local coordinates (IntelliJ `getElementUnderCursor`):
-/// nodes win over edges.
+/// Element under a point in unscaled row-local coordinates (IntelliJ
+/// `getElementUnderCursor`): nodes win over edges.
 pub fn element_at(elements: &[PrintElement], x: f32, y: f32) -> Option<&PrintElement> {
     let row_center = (ROW_HEIGHT / 2.0).floor();
     let element_center = (LANE_WIDTH / 2.0).floor();

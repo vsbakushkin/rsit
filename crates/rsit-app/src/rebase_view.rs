@@ -238,17 +238,17 @@ impl RebaseView {
         div()
             .id(("rebase-row", i))
             .test_support()
-            .h(px(ROW_HEIGHT))
+            .h(rems(ROW_HEIGHT / 16.))
             .px_2()
             .flex()
             .items_center()
             .gap_3()
             .when(i == self.selected, |d| d.bg(active))
             .when(i != self.selected, |d| d.hover(|s| s.bg(hover)))
-            .child(div().w(px(64.)).flex_none().text_color(color).child(e.action.label()))
+            .child(div().w(rems(4.)).flex_none().text_color(color).child(e.action.label()))
             .child(
                 div()
-                    .w(px(76.))
+                    .w(rems(4.75))
                     .flex_none()
                     .whitespace_nowrap()
                     .overflow_hidden()
@@ -266,7 +266,7 @@ impl RebaseView {
                     .when(changed_message, |d| d.italic())
                     .child(if melded { format!("↳ {}", e.subject()) } else { e.subject().to_string() }),
             )
-            .child(div().w(px(130.)).flex_none().truncate().text_color(muted).child(e.author.clone()))
+            .child(div().w(rems(8.125)).flex_none().truncate().text_color(muted).child(e.author.clone()))
             .on_click(cx.listener(move |this, _, window, cx| {
                 window.focus(&this.table_focus, cx);
                 this.select(i, window, cx);
@@ -328,7 +328,7 @@ impl Render for RebaseView {
                         action_button("act-drop", "Drop", "D / Delete")
                             .on_click(cx.listener(|t, _, w, cx| t.set_action(Action::Drop, w, cx))),
                     )
-                    .child(div().w(px(12.)))
+                    .child(div().w(rems(0.75)))
                     .child(
                         action_button("move-up", "Move Up", "Alt+↑")
                             .on_click(cx.listener(|t, _, w, cx| t.move_entry(-1, w, cx))),
@@ -379,7 +379,7 @@ impl Render for RebaseView {
                     )
                     .child(
                         div()
-                            .w(px(420.))
+                            .w(rems(26.25))
                             .flex_none()
                             .p_2()
                             .flex()

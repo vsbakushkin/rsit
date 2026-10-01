@@ -30,14 +30,20 @@ impl DiffSide {
         let exists = bytes.is_some();
         let text = String::from_utf8_lossy(&bytes.unwrap_or_default()).into_owned();
         let line_starts = Lines::new(&text).starts;
-        let syntax = if text.len() <= MAX_HIGHLIGHT_BYTES && language != "text" {
+        let mut side = Self { text, line_starts, syntax: Vec::new(), words: Vec::new(), exists };
+        side.highlight(language, theme);
+        side
+    }
+
+    /// Recomputes the syntax highlighting, e.g. for another theme.
+    pub fn highlight(&mut self, language: &str, theme: &HighlightTheme) {
+        self.syntax = if self.text.len() <= MAX_HIGHLIGHT_BYTES && language != "text" {
             let mut highlighter = SyntaxHighlighter::new(language);
-            highlighter.update(None, &Rope::from_str(&text), None);
-            highlighter.styles(&(0..text.len()), theme)
+            highlighter.update(None, &Rope::from_str(&self.text), None);
+            highlighter.styles(&(0..self.text.len()), theme)
         } else {
             Vec::new()
         };
-        Self { text, line_starts, syntax, words: Vec::new(), exists }
     }
 
     pub fn line_count(&self) -> u32 {

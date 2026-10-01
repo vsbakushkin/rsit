@@ -15,6 +15,7 @@ use rsit_git::{ObjectId, Repo};
 use crate::diff_model::{DiffSide, language_for};
 use crate::file_view::{self, FileTab};
 use crate::selection::{SelectableText, SelectionState};
+use crate::settings::{editor_scale, scaled};
 use crate::text::{clip, max_columns};
 
 const ROW_HEIGHT: f32 = 20.0;
@@ -53,6 +54,7 @@ pub struct BlameView {
     selection: SelectionState,
     focus: FocusHandle,
     _load: Option<Task<()>>,
+    _theme: Subscription,
 }
 
 impl BlameView {
@@ -71,6 +73,7 @@ impl BlameView {
             selection: SelectionState::default(),
             focus: cx.focus_handle(),
             _load: None,
+            _theme: crate::settings::observe_highlight_theme(cx, Self::reload),
         };
         this.reload(cx);
         this
@@ -172,6 +175,7 @@ impl BlameView {
         let Some(data) = self.data.clone() else { return Vec::new() };
         let theme = cx.theme();
         let (muted, bg, mono) = (theme.muted_foreground, theme.background, theme.mono_font_family.clone());
+        let s = editor_scale(cx);
         let age_color: Hsla = if theme.is_dark() { rgb(0x4a7a52).into() } else { rgb(0x8fce9a).into() };
         let uncommitted_color: Hsla = if theme.is_dark() { rgb(0x5a5a2a).into() } else { rgb(0xf2e6a0).into() };
         let hover_color = theme.list_active;
@@ -201,14 +205,14 @@ impl BlameView {
                 let annotation = div()
                     .id(("annotation", i))
                     .test_support()
-                    .w(px(ANNOTATION_WIDTH))
+                    .w(scaled(ANNOTATION_WIDTH, s))
                     .flex_none()
                     .h_full()
                     .px_2()
                     .flex()
                     .items_center()
                     .bg(gutter_bg)
-                    .text_xs()
+                    .text_size(scaled(12., s))
                     .truncate()
                     .cursor_pointer()
                     .child(label)
@@ -282,7 +286,7 @@ impl BlameView {
                 div()
                     .id(("blame-line", i))
                     .test_support()
-                    .h(px(ROW_HEIGHT))
+                    .h(scaled(ROW_HEIGHT, s))
                     .w_full()
                     .flex()
                     .font_family(mono.clone())
@@ -291,13 +295,13 @@ impl BlameView {
                     .child(annotation)
                     .child(
                         div()
-                            .w(px(48.))
+                            .w(scaled(48., s))
                             .flex_none()
                             .px_1()
                             .flex()
                             .justify_end()
                             .items_center()
-                            .text_xs()
+                            .text_size(scaled(12., s))
                             .text_color(muted)
                             .child((i + 1).to_string()),
                     )
@@ -358,7 +362,7 @@ impl Render for BlameView {
                     uniform_list("blame-rows", self.line_count(), cx.processor(Self::render_rows))
                         .track_scroll(&self.scroll)
                         .size_full()
-                        .text_size(px(13.)),
+                        .text_size(theme.mono_font_size),
                 )
                 .into_any_element()
         };

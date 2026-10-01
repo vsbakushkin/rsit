@@ -74,15 +74,22 @@ jobs:
         run: cargo build --release --locked -p rsit-app
         env:
           RSIT_VERSION: ${{ steps.version.outputs.version }}
+      - name: Install appimagetool
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/appimagetool" \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x "$RUNNER_TEMP/appimagetool"
       - name: Package
         run: script/package-linux.sh "v${{ steps.version.outputs.version }}"
+        env:
+          APPIMAGETOOL: ${{ runner.temp }}/appimagetool
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: v${{ steps.version.outputs.version }}
         run: |
-          gh release create "$VERSION" dist/*.tar.gz \
+          gh release create "$VERSION" dist/*.tar.gz dist/*.AppImage \
             --target "$GITHUB_SHA" \
             --title "rsit $VERSION" \
             --generate-notes \
-            --notes "Linux x86_64. Unpack and run \`./rsit\` inside a repository, or \`./install.sh\` to put it into ~/.local/bin with a desktop entry. Needs \`git\` installed."
+            --notes "Linux x86_64, needs \`git\` installed. **AppImage**: \`chmod +x\` it and run it inside a repository. **tar.gz**: unpack and run \`./rsit\`, or \`./install.sh\` to put it into ~/.local/bin with a desktop entry."

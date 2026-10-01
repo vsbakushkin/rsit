@@ -7,3 +7,4 @@ Exec=rsit %f
 Terminal=false
 Categories=Development;RevisionControl;
 StartupWMClass=rsit
+Icon=rsit

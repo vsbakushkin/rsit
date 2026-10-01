@@ -1,6 +1,7 @@
 //! The Welcome window shown when rsit starts outside a repository: recent
 //! repositories and a folder picker (IntelliJ's Welcome screen).
 
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -8,6 +9,7 @@ use gpui_kit::component::{ActiveTheme as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use rsit_git::Repo;
+use rsit_git::wsl::WslPath;
 use rsit_log::LogFilter;
 
 actions!(welcome, [SelectPrevRecent, SelectNextRecent, OpenSelectedRecent, ForgetSelectedRecent]);
@@ -60,9 +62,50 @@ impl Recent {
     }
 }
 
-/// The most recently opened repository that still exists.
-pub fn last_repo() -> Option<Repo> {
-    Recent::load().iter().find_map(|dir| Repo::discover(dir).ok())
+/// Opens the most recently opened repository, or the Welcome window when there
+/// is none (see [`open_dir`]).
+pub fn open_last(filter: LogFilter, cx: &mut App) {
+    match Recent::load().into_iter().next() {
+        Some(dir) => open_dir(dir, filter, cx),
+        None => open(filter, cx),
+    }
+}
+
+/// Opens the repository at `dir`, or the Welcome window when it is gone. One
+/// inside a stopped WSL distribution opens from the Welcome window once the
+/// distribution has started, so a window shows at once.
+pub fn open_dir(dir: PathBuf, filter: LogFilter, cx: &mut App) {
+    if let Some(wsl) = stopped_wsl(&dir) {
+        return open_with(filter, cx, move |welcome, cx| welcome.open_in_background(dir, &wsl.distro, cx));
+    }
+    match Repo::discover(&dir) {
+        Ok(repo) => crate::workspace::open(repo, filter, true, cx),
+        Err(_) => open(filter, cx),
+    }
+}
+
+/// Whether opening `dir` first has to start its WSL distribution.
+pub fn waits_for_wsl(dir: &Path) -> bool {
+    stopped_wsl(dir).is_some()
+}
+
+/// The WSL distribution `dir` is in, if it is not running.
+fn stopped_wsl(dir: &Path) -> Option<WslPath> {
+    WslPath::parse(dir).filter(|wsl| !wsl.is_running())
+}
+
+/// Recent directories that no longer exist. Ones inside a stopped WSL
+/// distribution are not checked: that would start it and take ~20 s.
+fn missing_dirs(dirs: &[PathBuf]) -> HashSet<PathBuf> {
+    let mut running = HashMap::new();
+    dirs.iter()
+        .filter(|dir| match WslPath::parse(dir) {
+            Some(wsl) => *running.entry(wsl.distro.clone()).or_insert_with(|| wsl.is_running()),
+            None => true,
+        })
+        .filter(|dir| !dir.is_dir())
+        .cloned()
+        .collect()
 }
 
 /// Shows the system folder picker; resolves to the chosen folder, or `None` if cancelled.
@@ -92,19 +135,34 @@ pub struct Welcome {
     watch: bool,
     focus: FocusHandle,
     error: Option<SharedString>,
+    /// What a repository being opened in the background waits for.
+    status: Option<SharedString>,
+    /// Recent directories found gone, checked off the UI thread.
+    missing: HashSet<PathBuf>,
     _pick: Option<Task<()>>,
+    _open: Option<Task<()>>,
+    _missing: Option<Task<()>>,
 }
 
 /// Opens the Welcome window; the app quits when it closes without opening a repository.
 pub fn open(filter: LogFilter, cx: &mut App) {
+    open_with(filter, cx, |_, _| {});
+}
+
+fn open_with(filter: LogFilter, cx: &mut App, init: impl FnOnce(&mut Welcome, &mut Context<Welcome>) + 'static) {
     let options = WindowOptions {
         titlebar: Some(TitlebarOptions { title: Some("Welcome to rsit".into()), ..Default::default() }),
         window_bounds: Some(WindowBounds::centered(size(px(720.), px(480.)), cx)),
         app_id: Some("rsit".into()),
         ..Default::default()
     };
-    let result =
-        gpui_kit::open_window(options, cx, |window, cx| cx.new(|cx| Welcome::new(filter, Recent::load(), window, cx)));
+    let result = gpui_kit::open_window(options, cx, |window, cx| {
+        cx.new(|cx| {
+            let mut welcome = Welcome::new(filter, Recent::load(), window, cx);
+            init(&mut welcome, cx);
+            welcome
+        })
+    });
     match result {
         Ok(_) => cx
             .on_window_closed(|cx, _| {
@@ -124,7 +182,29 @@ impl Welcome {
     pub fn new(filter: LogFilter, recent: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
-        Self { filter, recent, selected: 0, watch: true, focus, error: None, _pick: None }
+        let dirs = recent.clone();
+        let check = cx.background_executor().spawn(async move { missing_dirs(&dirs) });
+        let missing = cx.spawn(async move |this, cx| {
+            let missing = check.await;
+            this.update(cx, |this, cx| {
+                this.missing = missing;
+                cx.notify();
+            })
+            .ok();
+        });
+        Self {
+            filter,
+            recent,
+            selected: 0,
+            watch: true,
+            focus,
+            error: None,
+            status: None,
+            missing: HashSet::new(),
+            _pick: None,
+            _open: None,
+            _missing: Some(missing),
+        }
     }
 
     /// Opened repositories are not watched for changes (for tests).
@@ -135,6 +215,10 @@ impl Welcome {
 
     pub fn error(&self) -> Option<&str> {
         self.error.as_deref()
+    }
+
+    pub fn status(&self) -> Option<&str> {
+        self.status.as_deref()
     }
 
     pub fn recent(&self) -> &[PathBuf] {
@@ -166,7 +250,32 @@ impl Welcome {
 
     /// Opens the repository at `dir` in the main window and closes this one.
     pub fn open_repo(&mut self, dir: &Path, window: &mut Window, cx: &mut Context<Self>) {
-        match Repo::discover(dir) {
+        if let Some(wsl) = stopped_wsl(dir) {
+            return self.open_in_background(dir.to_path_buf(), &wsl.distro, cx);
+        }
+        self.opened(Repo::discover(dir), window, cx);
+    }
+
+    /// Opens a repository inside a stopped WSL distribution, showing a status
+    /// while the distribution starts.
+    fn open_in_background(&mut self, dir: PathBuf, distro: &str, cx: &mut Context<Self>) {
+        let name = dir.file_name().map_or_else(|| dir.display().to_string(), |n| n.to_string_lossy().into());
+        self.error = None;
+        self.status = Some(format!("Starting WSL ({distro}) to open {name}…").into());
+        cx.notify();
+        let discover = cx.background_executor().spawn(async move { Repo::discover(&dir) });
+        self._open = Some(cx.spawn(async move |this, cx| {
+            let result = discover.await;
+            this.update_in(cx, |this, window, cx| {
+                this.status = None;
+                this.opened(result, window, cx);
+            })
+            .ok();
+        }));
+    }
+
+    fn opened(&mut self, result: anyhow::Result<Repo>, window: &mut Window, cx: &mut Context<Self>) {
+        match result {
             Ok(repo) => {
                 crate::workspace::open(repo, self.filter.clone(), self.watch, cx);
                 window.remove_window();
@@ -197,7 +306,7 @@ impl Render for Welcome {
             .enumerate()
             .map(|(i, dir)| {
                 let name = dir.file_name().map_or_else(|| dir.display().to_string(), |n| n.to_string_lossy().into());
-                let missing = !dir.exists();
+                let missing = self.missing.contains(dir);
                 let (open_dir, forget_dir) = (dir.clone(), dir.clone());
                 div()
                     .id(("recent", i))
@@ -272,6 +381,7 @@ impl Render for Welcome {
                             .on_click(cx.listener(|this, _, _, cx| this.pick(cx))),
                     ),
             )
+            .children(self.status.clone().map(|s| div().id("welcome-status").text_sm().text_color(muted).child(s)))
             .children(self.error.clone().map(|e| div().text_sm().text_color(theme.danger).child(e)))
             .child(div().text_sm().text_color(muted).child("Recent repositories"))
             .child(
@@ -286,5 +396,21 @@ impl Render for Welcome {
                     .children(rows)
                     .when(empty, |d| d.child(div().p_3().text_color(muted).child("No recent repositories"))),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // not `super::*`: gpui's `test` attribute would shadow the standard one
+    use std::collections::HashSet;
+
+    use super::missing_dirs;
+
+    #[test]
+    fn missing_dirs_lists_gone_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let gone = dir.path().join("gone");
+        let missing = missing_dirs(&[dir.path().to_path_buf(), gone.clone()]);
+        assert_eq!(missing, HashSet::from([gone]));
     }
 }

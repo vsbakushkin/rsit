@@ -31,14 +31,17 @@ pub struct Repo {
 }
 
 impl Repo {
-    /// Finds the repository containing `path`.
+    /// Finds the repository containing `path`. Starts a stopped WSL
+    /// distribution first, which can take half a minute after a reboot.
     pub fn discover(path: &Path) -> Result<Self> {
+        // the share of a stopped distribution blocks for ~20 s and then fails
+        if let Some(wsl) = wsl::WslPath::parse(path)
+            && !wsl.is_running()
+        {
+            wsl.wake()?;
+        }
         // absolute paths keep file watching and `git` invocations independent of the cwd
-        let canonical = match dirs::canonical(path) {
-            Err(_) if let Some(wsl) = wsl::WslPath::parse(path) => wsl.wake().and_then(|()| dirs::canonical(path)),
-            result => result,
-        };
-        let path = canonical.with_context(|| format!("no such path: {}", path.display()))?;
+        let path = dirs::canonical(path).with_context(|| format!("no such path: {}", path.display()))?;
         let repo = if wsl::WslPath::parse(&path).is_some() {
             // git there runs in Linux and never sees Windows' configuration, whose
             // system file sets core.autocrlf=true; read only the repository's own

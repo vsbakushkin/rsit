@@ -49,15 +49,26 @@ impl WslPath {
     /// Starts the distribution: a stopped one (idle, or after a reboot) does not
     /// answer on its share until something runs in it.
     pub fn wake(&self) -> std::io::Result<()> {
-        let mut cmd = std::process::Command::new("wsl.exe");
-        cmd.args(["--distribution", &self.distro, "--exec", "true"]);
-        #[cfg(windows)]
-        std::os::windows::process::CommandExt::creation_flags(&mut cmd, 0x0800_0000); // CREATE_NO_WINDOW
-        let status = cmd.stdin(std::process::Stdio::null()).output()?.status;
+        let status = wsl_exe(&["--distribution", &self.distro, "--exec", "true"]).output()?.status;
         if !status.success() {
             return Err(std::io::Error::other(format!("cannot start WSL distribution {}", self.distro)));
         }
         Ok(())
+    }
+
+    /// Whether the distribution is running, asked from `wsl.exe` in ~25 ms:
+    /// touching the share of a stopped one instead blocks for ~20 s, then
+    /// fails (and starts it).
+    pub fn is_running(&self) -> bool {
+        let Ok(out) = wsl_exe(&["--list", "--running", "--quiet"]).output() else { return false };
+        // UTF-16 unless WSL_UTF8=1 is set
+        let text = if out.stdout.get(1) == Some(&0) {
+            let units: Vec<u16> = out.stdout.as_chunks::<2>().0.iter().map(|&pair| u16::from_le_bytes(pair)).collect();
+            String::from_utf16_lossy(&units)
+        } else {
+            String::from_utf8_lossy(&out.stdout).into_owned()
+        };
+        text.lines().any(|name| name.trim().eq_ignore_ascii_case(&self.distro))
     }
 
     /// The Windows path of `linux` (absolute) in the same distribution.
@@ -66,6 +77,14 @@ impl WslPath {
         path.extend(linux.split('/').filter(|s| !s.is_empty()));
         path
     }
+}
+
+fn wsl_exe(args: &[&str]) -> std::process::Command {
+    let mut cmd = std::process::Command::new("wsl.exe");
+    cmd.args(args).stdin(std::process::Stdio::null());
+    #[cfg(windows)]
+    std::os::windows::process::CommandExt::creation_flags(&mut cmd, 0x0800_0000); // CREATE_NO_WINDOW
+    cmd
 }
 
 #[cfg(all(test, windows))]

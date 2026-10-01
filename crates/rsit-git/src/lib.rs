@@ -39,7 +39,16 @@ impl Repo {
             result => result,
         };
         let path = canonical.with_context(|| format!("no such path: {}", path.display()))?;
-        let repo = gix::discover(&path).with_context(|| format!("not a git repository: {}", path.display()))?;
+        let repo = if wsl::WslPath::parse(&path).is_some() {
+            // git there runs in Linux and never sees Windows' configuration, whose
+            // system file sets core.autocrlf=true; read only the repository's own
+            let options = gix::open::Options::isolated();
+            let trust = gix::sec::trust::Mapping { full: options.clone(), reduced: options };
+            gix::ThreadSafeRepository::discover_opts(&path, Default::default(), trust).map(|r| r.to_thread_local())
+        } else {
+            gix::discover(&path)
+        };
+        let repo = repo.with_context(|| format!("not a git repository: {}", path.display()))?;
         let workdir = repo.workdir().map(Path::to_path_buf);
         let git_dir = repo.git_dir().to_path_buf();
         let common_dir = repo.common_dir().to_path_buf();

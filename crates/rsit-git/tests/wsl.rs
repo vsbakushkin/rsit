@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use rsit_git::rebase::{Action, RebasePlan, run_interactive};
-use rsit_git::{Repo, changes, cli};
+use rsit_git::{Repo, Revision, changes, cli, file_at_revision, to_worktree};
 
 /// Runs `script` in a fresh repository under the distribution's /tmp and
 /// returns its Windows path; the repository is removed on drop.
@@ -55,9 +55,19 @@ fn reads_and_writes_through_the_distributions_git() {
         eprintln!("RSIT_TEST_WSL_DISTRO not set, skipping");
         return;
     };
+    // Windows configuration with core.autocrlf=true, as Git for Windows' system
+    // file has; it must not apply to files inside Linux.
+    // SAFETY: the only test in this binary, set before anything reads it
+    unsafe {
+        std::env::set_var("GIT_CONFIG_COUNT", "1");
+        std::env::set_var("GIT_CONFIG_KEY_0", "core.autocrlf");
+        std::env::set_var("GIT_CONFIG_VALUE_0", "true");
+    }
     let repo = Repo::discover(&wsl.path()).unwrap();
     let cwd = repo.cwd().to_path_buf();
     assert_eq!(repo.display_name(), wsl.linux.rsplit('/').next().unwrap());
+    assert_eq!(to_worktree(&repo.local(), "f.txt", b"x\ny\n").unwrap(), b"x\ny\n");
+    assert_eq!(file_at_revision(&repo, Revision::WorkTree, "f.txt").unwrap().unwrap(), b"a\nb\n");
 
     // Windows git would refuse ("dubious ownership") or report run.sh's mode
     let status = changes::status(&cwd).unwrap();

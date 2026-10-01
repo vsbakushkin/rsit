@@ -10,6 +10,7 @@ pub mod history;
 pub mod ops;
 pub mod rebase;
 mod refs;
+pub mod wsl;
 
 use std::path::{Path, PathBuf};
 
@@ -33,7 +34,11 @@ impl Repo {
     /// Finds the repository containing `path`.
     pub fn discover(path: &Path) -> Result<Self> {
         // absolute paths keep file watching and `git` invocations independent of the cwd
-        let path = dirs::canonical(path).with_context(|| format!("no such path: {}", path.display()))?;
+        let canonical = match dirs::canonical(path) {
+            Err(_) if let Some(wsl) = wsl::WslPath::parse(path) => wsl.wake().and_then(|()| dirs::canonical(path)),
+            result => result,
+        };
+        let path = canonical.with_context(|| format!("no such path: {}", path.display()))?;
         let repo = gix::discover(&path).with_context(|| format!("not a git repository: {}", path.display()))?;
         let workdir = repo.workdir().map(Path::to_path_buf);
         let git_dir = repo.git_dir().to_path_buf();

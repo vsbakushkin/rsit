@@ -6,7 +6,12 @@ use clap::Parser;
 use gpui_kit::*;
 
 #[derive(Parser)]
-#[command(version, about = "Git log with a commit graph, IntelliJ style")]
+// release builds get their version (`0.1.N`) through RSIT_VERSION
+#[command(
+    name = "rsit",
+    version = option_env!("RSIT_VERSION").unwrap_or(env!("CARGO_PKG_VERSION")),
+    about = "Git log with a commit graph, IntelliJ style"
+)]
 struct Args {
     /// Path inside the repository (defaults to the current directory).
     path: Option<PathBuf>,

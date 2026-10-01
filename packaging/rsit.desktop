@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=rsit
+GenericName=Git Client
+Comment=Git log with a commit graph, IntelliJ style
+Exec=rsit %f
+Terminal=false
+Categories=Development;RevisionControl;
+StartupWMClass=rsit

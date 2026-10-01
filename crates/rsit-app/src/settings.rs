@@ -1,5 +1,5 @@
 //! User settings — color theme and font sizes — kept in
-//! `$XDG_CONFIG_HOME/rsit/settings.json`, and the Settings window (Ctrl+Alt+S).
+//! `settings.json` in [`rsit_git::dirs::config_dir`], and the Settings window (Ctrl+Alt+S).
 
 use std::path::PathBuf;
 
@@ -136,11 +136,7 @@ fn save(cx: &App) {
 }
 
 fn settings_path() -> Option<PathBuf> {
-    let config = std::env::var_os("XDG_CONFIG_HOME")
-        .filter(|d| !d.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| std::env::home_dir().map(|h| h.join(".config")))?;
-    Some(config.join("rsit").join("settings.json"))
+    Some(rsit_git::dirs::config_dir()?.join("settings.json"))
 }
 
 /// Scale of list rows: they follow the UI font size.

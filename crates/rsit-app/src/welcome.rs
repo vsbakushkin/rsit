@@ -26,7 +26,7 @@ pub fn init(cx: &mut App) {
 /// How many repositories the recent list keeps.
 const MAX_RECENT: usize = 20;
 
-/// Recently opened repositories, newest first, in `$XDG_STATE_HOME/rsit/recent.json`.
+/// Recently opened repositories, newest first, in `recent.json` in [`rsit_git::dirs::state_dir`].
 pub struct Recent;
 
 impl Recent {
@@ -81,11 +81,7 @@ pub fn pick_folder(cx: &mut App) -> Task<anyhow::Result<Option<PathBuf>>> {
 }
 
 fn recent_path() -> Option<PathBuf> {
-    let state = std::env::var_os("XDG_STATE_HOME")
-        .filter(|d| !d.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| std::env::home_dir().map(|h| h.join(".local").join("state")))?;
-    Some(state.join("rsit").join("recent.json"))
+    Some(rsit_git::dirs::state_dir()?.join("recent.json"))
 }
 
 pub struct Welcome {

@@ -1,4 +1,6 @@
 //! rsit — a standalone git client modelled on IntelliJ's Git tool window.
+// release builds are GUI apps on Windows: no console window from Explorer
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 use std::path::PathBuf;
 
@@ -51,6 +53,7 @@ struct Args {
 actions!(rsit, [Quit]);
 
 fn main() {
+    attach_console();
     let args = Args::parse();
     let filter = rsit_log::LogFilter {
         text: args.text.unwrap_or_default(),
@@ -177,6 +180,22 @@ fn main() {
     });
 }
 
+/// Sends `--help` and errors to the terminal rsit was started from, which a
+/// Windows GUI app does not get by itself.
+fn attach_console() {
+    #[cfg(windows)]
+    // SAFETY: plain Win32 calls; attaching fails harmlessly without a parent console
+    unsafe {
+        use windows_sys::Win32::System::Console::{
+            ATTACH_PARENT_PROCESS, AttachConsole, GetStdHandle, STD_OUTPUT_HANDLE,
+        };
+        // attaching would replace a redirected stdout (`rsit --help > file`)
+        if GetStdHandle(STD_OUTPUT_HANDLE).is_null() {
+            AttachConsole(ATTACH_PARENT_PROCESS);
+        }
+    }
+}
+
 fn init(cx: &mut App) {
     rsit_app::init(cx);
     rsit_app::settings::load(cx);
@@ -196,11 +215,11 @@ fn repo_relative(repo: &rsit_git::Repo, file: &std::path::Path) -> anyhow::Resul
     let workdir = repo.workdir().ok_or_else(|| anyhow::anyhow!("bare repository"))?;
     let absolute = std::path::absolute(file)?;
     // the file may be deleted; canonicalize its directory instead
-    let absolute = match absolute.canonicalize() {
+    let absolute = match rsit_git::dirs::canonical(&absolute) {
         Ok(p) => p,
         Err(_) => absolute
             .parent()
-            .and_then(|d| d.canonicalize().ok())
+            .and_then(|d| rsit_git::dirs::canonical(d).ok())
             .map(|d| d.join(absolute.file_name().unwrap_or_default()))
             .unwrap_or(absolute),
     };

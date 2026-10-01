@@ -4,6 +4,7 @@
 pub mod changes;
 pub mod cli;
 pub mod conflicts;
+pub mod dirs;
 mod graph;
 pub mod history;
 pub mod ops;
@@ -32,7 +33,7 @@ impl Repo {
     /// Finds the repository containing `path`.
     pub fn discover(path: &Path) -> Result<Self> {
         // absolute paths keep file watching and `git` invocations independent of the cwd
-        let path = path.canonicalize().with_context(|| format!("no such path: {}", path.display()))?;
+        let path = dirs::canonical(path).with_context(|| format!("no such path: {}", path.display()))?;
         let repo = gix::discover(&path).with_context(|| format!("not a git repository: {}", path.display()))?;
         let workdir = repo.workdir().map(Path::to_path_buf);
         let git_dir = repo.git_dir().to_path_buf();

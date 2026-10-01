@@ -1,6 +1,8 @@
 //! Main window: a toolbar with the branch widget and remote actions, the
 //! Commit tool window on the left (Alt+0) and the Log.
 
+use std::path::Path;
+
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
@@ -25,6 +27,30 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("ctrl-shift-k", Push, None),
         KeyBinding::new("ctrl-shift-n", GoToFile, None),
     ]);
+}
+
+/// Opens the main window for `repo`; closing it quits the app, other windows are secondary.
+/// `watch: false` disables file system watching (for tests).
+pub fn open(repo: Repo, filter: LogFilter, watch: bool, cx: &mut App) {
+    if let Some(dir) = repo.workdir().map(Path::to_path_buf) {
+        crate::welcome::Recent::add(&dir);
+    }
+    let title = format!("{} — rsit", repo.display_name());
+    let options = WindowOptions {
+        titlebar: Some(TitlebarOptions { title: Some(title.into()), ..Default::default() }),
+        window_bounds: Some(WindowBounds::centered(size(px(1500.), px(900.)), cx)),
+        app_id: Some("rsit".into()),
+        ..Default::default()
+    };
+    let (main_window, _) =
+        gpui_kit::open_window(options, cx, |window, cx| cx.new(|cx| Workspace::new(repo, filter, watch, window, cx)))
+            .expect("failed to open window");
+    cx.on_window_closed(move |cx, closed| {
+        if closed == main_window.window_id() {
+            cx.quit();
+        }
+    })
+    .detach();
 }
 
 #[derive(Clone, Default)]

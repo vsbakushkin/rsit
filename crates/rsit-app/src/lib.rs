@@ -19,6 +19,7 @@ pub mod selection;
 pub mod settings;
 pub mod tasks;
 pub mod text;
+pub mod welcome;
 pub mod workspace;
 
 /// Initializes gpui-kit and rsit key bindings.
@@ -34,6 +35,7 @@ pub fn init(cx: &mut gpui_kit::App) {
     rebase_view::init(cx);
     merge_view::init(cx);
     blame_view::init(cx);
+    welcome::init(cx);
 }
 
 gpui_kit::assets::icon_assets!(ExtraIcons, [GitBranch, ArrowDownToLine, ArrowUpFromLine, Settings]);

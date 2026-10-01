@@ -59,9 +59,22 @@ fn main() {
         branches: args.branch.into_iter().collect(),
         paths: args.paths,
     };
+    // started without a path outside a repository (e.g. from the app launcher):
+    // let the user choose one
+    let choose = args.path.is_none()
+        && [&args.diff, &args.rebase].iter().all(|a| a.is_none())
+        && [&args.blame, &args.history, &args.merge].iter().all(|a| a.is_none());
     let path = args.path.unwrap_or_else(|| PathBuf::from("."));
     let repo = match rsit_git::Repo::discover(&path) {
         Ok(repo) => repo,
+        Err(_) if choose => {
+            gpui_kit::application().with_assets(rsit_app::AppAssets).run(move |cx| {
+                init(cx);
+                rsit_app::welcome::open(filter, cx);
+                cx.activate(true);
+            });
+            return;
+        }
         Err(e) => {
             eprintln!("rsit: {e:#}");
             std::process::exit(1);
@@ -105,8 +118,7 @@ fn main() {
     };
 
     gpui_kit::application().with_assets(rsit_app::AppAssets).run(move |cx| {
-        rsit_app::init(cx);
-        rsit_app::settings::load(cx);
+        init(cx);
         if let Some(path) = merge {
             cx.on_window_closed(|cx, _| {
                 if cx.windows().is_empty() {
@@ -130,8 +142,6 @@ fn main() {
             return;
         }
         if let Some((path, tab)) = file {
-            cx.bind_keys([KeyBinding::new("ctrl-q", Quit, None)]);
-            cx.on_action(|_: &Quit, cx| cx.quit());
             cx.on_window_closed(|cx, _| {
                 if cx.windows().is_empty() {
                     cx.quit();
@@ -143,8 +153,6 @@ fn main() {
             return;
         }
         if let Some((commit, files)) = diff {
-            cx.bind_keys([KeyBinding::new("ctrl-q", Quit, None)]);
-            cx.on_action(|_: &Quit, cx| cx.quit());
             cx.on_window_closed(|cx, _| {
                 if cx.windows().is_empty() {
                     cx.quit();
@@ -161,29 +169,16 @@ fn main() {
             cx.activate(true);
             return;
         }
-        cx.bind_keys([KeyBinding::new("ctrl-q", Quit, None)]);
-        cx.on_action(|_: &Quit, cx| cx.quit());
-
-        let title = format!("{} — rsit", repo.display_name());
-        let options = WindowOptions {
-            titlebar: Some(TitlebarOptions { title: Some(title.into()), ..Default::default() }),
-            window_bounds: Some(WindowBounds::centered(size(px(1500.), px(900.)), cx)),
-            app_id: Some("rsit".into()),
-            ..Default::default()
-        };
-        let (main_window, _) = gpui_kit::open_window(options, cx, |window, cx| {
-            cx.new(|cx| rsit_app::workspace::Workspace::new(repo, filter, true, window, cx))
-        })
-        .expect("failed to open window");
-        // closing the log window quits, diff windows are secondary
-        cx.on_window_closed(move |cx, closed| {
-            if closed == main_window.window_id() {
-                cx.quit();
-            }
-        })
-        .detach();
+        rsit_app::workspace::open(repo, filter, true, cx);
         cx.activate(true);
     });
+}
+
+fn init(cx: &mut App) {
+    rsit_app::init(cx);
+    rsit_app::settings::load(cx);
+    cx.bind_keys([KeyBinding::new("ctrl-q", Quit, None)]);
+    cx.on_action(|_: &Quit, cx| cx.quit());
 }
 
 fn resolve_diff(repo: &rsit_git::Repo, rev: &str) -> anyhow::Result<(rsit_git::ObjectId, Vec<rsit_git::FileChange>)> {

@@ -70,15 +70,21 @@ fn main() {
     if args.path.is_none() && !views {
         gpui_kit::application().with_assets(rsit_app::AppAssets).run(move |cx| {
             init(cx);
-            match rsit_app::welcome::last_repo() {
-                Some(repo) => rsit_app::workspace::open(repo, filter, true, cx),
-                None => rsit_app::welcome::open(filter, cx),
-            }
+            rsit_app::welcome::open_last(filter, cx);
             cx.activate(true);
         });
         return;
     }
     let path = args.path.unwrap_or_else(|| PathBuf::from("."));
+    // a stopped WSL distribution takes a while to start: show a window meanwhile
+    if !views && rsit_app::welcome::waits_for_wsl(&path) {
+        gpui_kit::application().with_assets(rsit_app::AppAssets).run(move |cx| {
+            init(cx);
+            rsit_app::welcome::open_dir(path, filter, cx);
+            cx.activate(true);
+        });
+        return;
+    }
     let repo = match rsit_git::Repo::discover(&path) {
         Ok(repo) => repo,
         Err(e) => {

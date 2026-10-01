@@ -46,3 +46,50 @@ jobs:
       - run: cargo test --workspace --locked
       # same job as the build so clippy reuses its dependencies
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  # every merge to main that passes the checks becomes release v0.1.N
+  release:
+    name: Release
+    needs: [fmt, test]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # the oldest supported runner, so the binary runs on glibc 2.35 and newer
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: rui314/setup-mold@v1
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfontconfig-dev libwayland-dev libxkbcommon-x11-dev \
+            libx11-xcb-dev libssl-dev libzstd-dev libvulkan1
+      - name: Next version
+        id: version
+        run: |
+          last=$(git ls-remote --tags origin 'refs/tags/v0.1.*' | sed 's|.*refs/tags/v0\.1\.||' | grep -E '^[0-9]+$' | sort -n | tail -1)
+          echo "version=0.1.$(( ${last:-0} + 1 ))" >> "$GITHUB_OUTPUT"
+      - name: Build
+        run: cargo build --release --locked -p rsit-app
+        env:
+          RSIT_VERSION: ${{ steps.version.outputs.version }}
+      - name: Install appimagetool
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/appimagetool" \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x "$RUNNER_TEMP/appimagetool"
+      - name: Package
+        run: script/package-linux.sh "v${{ steps.version.outputs.version }}"
+        env:
+          APPIMAGETOOL: ${{ runner.temp }}/appimagetool
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: v${{ steps.version.outputs.version }}
+        run: |
+          gh release create "$VERSION" dist/*.tar.gz dist/*.AppImage \
+            --target "$GITHUB_SHA" \
+            --title "rsit $VERSION" \
+            --generate-notes \
+            --notes "Linux x86_64, needs \`git\` installed. **AppImage**: \`chmod +x\` it and run it inside a repository. **tar.gz**: unpack and run \`./rsit\`, or \`./install.sh\` to put it into ~/.local/bin with a desktop entry."

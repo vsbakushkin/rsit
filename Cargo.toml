@@ -29,3 +29,6 @@ rsit-diff = { path = "crates/rsit-diff" }
 
 [profile.dev.package."*"]
 opt-level = 2
+
+[profile.release]
+strip = true

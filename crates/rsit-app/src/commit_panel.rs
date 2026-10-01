@@ -1,6 +1,7 @@
 //! The Commit tool window (IntelliJ with the staging area enabled): staged,
 //! unstaged, unversioned and conflicted files, the commit message, Amend and Commit.
 
+use std::ops::Range;
 use std::time::Duration;
 
 use gpui_kit::assets::IconName;
@@ -54,6 +55,15 @@ impl Group {
         }
     }
 
+    fn contains(self, e: &StatusEntry) -> bool {
+        match self {
+            Group::Conflicts => e.conflicted,
+            Group::Staged => e.staged.is_some() && !e.conflicted,
+            Group::Unstaged => e.unstaged.is_some() && !e.conflicted,
+            Group::Unversioned => e.untracked,
+        }
+    }
+
     fn id(self) -> &'static str {
         match self {
             Group::Conflicts => "conflicts",
@@ -64,9 +74,43 @@ impl Group {
     }
 }
 
+/// A line of the changes list: a group header or a file (index into the status).
+#[derive(Clone, Copy)]
+enum ChangeRow {
+    Header { group: Group, count: usize },
+    File { group: Group, entry: usize },
+}
+
+/// The changes list, header and files of each shown group in order.
+fn change_rows(status: &Status) -> Vec<ChangeRow> {
+    let mut rows = Vec::new();
+    for group in Group::ALL {
+        let start = rows.len();
+        rows.push(ChangeRow::Header { group, count: 0 });
+        rows.extend(
+            status
+                .entries
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| group.contains(e))
+                .map(|(entry, _)| ChangeRow::File { group, entry }),
+        );
+        let count = rows.len() - start - 1;
+        if count == 0 && group != Group::Staged && group != Group::Unstaged {
+            rows.truncate(start);
+        } else {
+            rows[start] = ChangeRow::Header { group, count };
+        }
+    }
+    rows
+}
+
 pub struct CommitPanel {
     repo: Repo,
     status: Status,
+    scroll: UniformListScrollHandle,
+    /// `status` as list rows; rebuilt with it.
+    rows: Vec<ChangeRow>,
     /// A merge/rebase/cherry-pick/revert waiting to be continued or aborted.
     operation: Option<Operation>,
     loaded: bool,
@@ -99,6 +143,8 @@ impl CommitPanel {
         let mut this = Self {
             repo,
             status: Status::default(),
+            rows: Vec::new(),
+            scroll: UniformListScrollHandle::new(),
             operation: None,
             loaded: false,
             selected: None,
@@ -151,6 +197,7 @@ impl CommitPanel {
                 this.operation = operation;
                 match status {
                     Ok(status) => {
+                        this.rows = change_rows(&status);
                         this.status = status;
                         this.loaded = true;
                         if let Some((group, path)) = &this.selected
@@ -167,13 +214,8 @@ impl CommitPanel {
         }));
     }
 
-    fn entries(&self, group: Group) -> Box<dyn Iterator<Item = &StatusEntry> + '_> {
-        match group {
-            Group::Conflicts => Box::new(self.status.conflicted()),
-            Group::Staged => Box::new(self.status.staged()),
-            Group::Unstaged => Box::new(self.status.unstaged()),
-            Group::Unversioned => Box::new(self.status.untracked()),
-        }
+    fn entries(&self, group: Group) -> impl Iterator<Item = &StatusEntry> {
+        self.status.entries.iter().filter(move |e| group.contains(e))
     }
 
     /// Runs a git operation in the background, then refreshes; failures become notifications.
@@ -461,21 +503,24 @@ impl CommitPanel {
 
     // ---- rendering ----
 
-    fn render_group(&mut self, group: Group, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let entries: Vec<StatusEntry> = self.entries(group).cloned().collect();
-        if entries.is_empty() && group != Group::Staged && group != Group::Unstaged {
-            return None;
-        }
-        let theme = cx.theme();
-        let (muted, hover, active) = (theme.muted_foreground, theme.list_hover, theme.list_active);
-        let paths: Vec<String> = entries.iter().map(|e| e.path.clone()).collect();
+    fn render_rows(&mut self, range: Range<usize>, _: &mut Window, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        range
+            .filter_map(|ix| match *self.rows.get(ix)? {
+                ChangeRow::Header { group, count } => Some(self.render_header(group, count, cx)),
+                ChangeRow::File { group, entry } => Some(self.render_file(group, entry, cx)),
+            })
+            .collect()
+    }
+
+    fn render_header(&mut self, group: Group, count: usize, cx: &mut Context<Self>) -> AnyElement {
+        let muted = cx.theme().muted_foreground;
         let header_action = match group {
             Group::Staged => Some((IconName::Minus, "Unstage All")),
             Group::Unstaged => Some((IconName::Plus, "Stage All")),
             Group::Unversioned => Some((IconName::Plus, "Add All")),
             Group::Conflicts => None,
         };
-        let header = div()
+        div()
             .id(SharedString::from(format!("group-{}", group.id())))
             .test_support()
             .h(rems(ROW_HEIGHT / 16.))
@@ -484,103 +529,108 @@ impl CommitPanel {
             .items_center()
             .gap_1()
             .child(div().font_weight(FontWeight::SEMIBOLD).child(group.title()))
-            .child(div().text_color(muted).child(format!("{}", entries.len())))
+            .child(div().text_color(muted).child(format!("{count}")))
             .child(div().flex_1())
-            .children(header_action.filter(|_| !entries.is_empty()).map(|(icon, tooltip)| {
-                let paths = paths.clone();
+            .children(header_action.filter(|_| count > 0).map(|(icon, tooltip)| {
                 Button::new(SharedString::from(format!("all-{}", group.id())))
                     .xsmall()
                     .ghost()
                     .icon(icon)
                     .tooltip(tooltip)
-                    .on_click(cx.listener(move |this, _, window, cx| match group {
-                        Group::Staged => this.unstage(paths.clone(), window, cx),
-                        _ => this.stage(paths.clone(), window, cx),
-                    }))
-            }));
-        let rows = entries.into_iter().map(|e| {
-            let kind = match group {
-                Group::Staged => e.staged,
-                Group::Unstaged => e.unstaged,
-                Group::Unversioned => Some(ChangeKind::Added),
-                Group::Conflicts => Some(ChangeKind::Modified),
-            }
-            .unwrap_or(ChangeKind::Modified);
-            let (letter, mut color) = crate::log_view::change_style(kind);
-            if group == Group::Unversioned {
-                color = rgb(0xC7222D).into(); // IntelliJ unversioned red
-            } else if group == Group::Conflicts {
-                color = rgb(0xD5756C).into();
-            }
-            let (dir, name) = match e.path.rsplit_once('/') {
-                Some((d, n)) => (d.to_string(), n.to_string()),
-                None => (String::new(), e.path.clone()),
-            };
-            let name = match &e.orig_path {
-                Some(orig) if group == Group::Staged => format!("{name} ← {orig}"),
-                _ => name,
-            };
-            let path = e.path.clone();
-            let selected = self.selected.as_ref().is_some_and(|(g, p)| *g == group && *p == path);
-            let row_action = match group {
-                Group::Staged => Some(IconName::Minus),
-                Group::Unstaged | Group::Unversioned => Some(IconName::Plus),
-                Group::Conflicts => None,
-            };
-            let (p1, p2, p3) = (path.clone(), path.clone(), path.clone());
-            div()
-                .id(SharedString::from(format!("{}:{}", group.id(), path)))
-                .test_support()
-                .group("change-row")
-                .h(rems(ROW_HEIGHT / 16.))
-                .pl_4()
-                .pr_1()
-                .flex()
-                .items_center()
-                .gap_2()
-                .when(selected, |d| d.bg(active))
-                .when(!selected, |d| d.hover(|s| s.bg(hover)))
-                .child(div().w(rems(0.75)).text_color(color).child(letter.to_string()))
-                .child(div().text_color(color).whitespace_nowrap().child(name))
-                .child(div().flex_1().min_w_0().truncate().text_color(muted).child(dir))
-                .children(row_action.map(|icon| {
-                    Button::new(SharedString::from(format!("act-{}:{}", group.id(), p3)))
-                        .xsmall()
-                        .ghost()
-                        .icon(icon)
-                        .on_click(cx.listener(move |this, _, window, cx| match group {
-                            Group::Staged => this.unstage(vec![p1.clone()], window, cx),
-                            _ => this.stage(vec![p1.clone()], window, cx),
-                        }))
-                }))
-                .on_mouse_down(
-                    MouseButton::Right,
-                    cx.listener(move |this, _, window, cx| {
-                        window.focus(&this.focus, cx);
-                        this.selected = Some((group, p2.clone()));
-                        cx.notify();
-                    }),
-                )
-                .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
-                    window.focus(&this.focus, cx);
-                    this.selected = Some((group, path.clone()));
-                    if event.click_count() >= 2 {
-                        if group == Group::Conflicts {
-                            crate::merge_view::open(this.repo.clone(), path.clone(), cx);
-                        } else {
-                            this.show_diff(group, &path, cx);
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        let paths: Vec<String> = this.entries(group).map(|e| e.path.clone()).collect();
+                        match group {
+                            Group::Staged => this.unstage(paths, window, cx),
+                            _ => this.stage(paths, window, cx),
                         }
-                    }
+                    }))
+            }))
+            .into_any_element()
+    }
+
+    fn render_file(&mut self, group: Group, entry: usize, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+        let (muted, hover, active) = (theme.muted_foreground, theme.list_hover, theme.list_active);
+        let e = &self.status.entries[entry];
+        let kind = match group {
+            Group::Staged => e.staged,
+            Group::Unstaged => e.unstaged,
+            Group::Unversioned => Some(ChangeKind::Added),
+            Group::Conflicts => Some(ChangeKind::Modified),
+        }
+        .unwrap_or(ChangeKind::Modified);
+        let (letter, mut color) = crate::log_view::change_style(kind);
+        if group == Group::Unversioned {
+            color = rgb(0xC7222D).into(); // IntelliJ unversioned red
+        } else if group == Group::Conflicts {
+            color = rgb(0xD5756C).into();
+        }
+        let (dir, name) = match e.path.rsplit_once('/') {
+            Some((d, n)) => (d.to_string(), n.to_string()),
+            None => (String::new(), e.path.clone()),
+        };
+        let name = match &e.orig_path {
+            Some(orig) if group == Group::Staged => format!("{name} ← {orig}"),
+            _ => name,
+        };
+        let path = e.path.clone();
+        let selected = self.selected.as_ref().is_some_and(|(g, p)| *g == group && *p == path);
+        let row_action = match group {
+            Group::Staged => Some(IconName::Minus),
+            Group::Unstaged | Group::Unversioned => Some(IconName::Plus),
+            Group::Conflicts => None,
+        };
+        let (p1, p2, p3) = (path.clone(), path.clone(), path.clone());
+        div()
+            .id(SharedString::from(format!("{}:{}", group.id(), path)))
+            .test_support()
+            .group("change-row")
+            .h(rems(ROW_HEIGHT / 16.))
+            .pl_4()
+            .pr_1()
+            .flex()
+            .items_center()
+            .gap_2()
+            .when(selected, |d| d.bg(active))
+            .when(!selected, |d| d.hover(|s| s.bg(hover)))
+            .child(div().w(rems(0.75)).text_color(color).child(letter.to_string()))
+            .child(div().text_color(color).whitespace_nowrap().child(name))
+            .child(div().flex_1().min_w_0().truncate().text_color(muted).child(dir))
+            .children(row_action.map(|icon| {
+                Button::new(SharedString::from(format!("act-{}:{}", group.id(), p3)))
+                    .xsmall()
+                    .ghost()
+                    .icon(icon)
+                    .on_click(cx.listener(move |this, _, window, cx| match group {
+                        Group::Staged => this.unstage(vec![p1.clone()], window, cx),
+                        _ => this.stage(vec![p1.clone()], window, cx),
+                    }))
+            }))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, _, window, cx| {
+                    window.focus(&this.focus, cx);
+                    this.selected = Some((group, p2.clone()));
                     cx.notify();
-                }))
-                .into_any_element()
-        });
-        Some(div().flex().flex_col().child(header).children(rows).into_any_element())
+                }),
+            )
+            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                window.focus(&this.focus, cx);
+                this.selected = Some((group, path.clone()));
+                if event.click_count() >= 2 {
+                    if group == Group::Conflicts {
+                        crate::merge_view::open(this.repo.clone(), path.clone(), cx);
+                    } else {
+                        this.show_diff(group, &path, cx);
+                    }
+                }
+                cx.notify();
+            }))
+            .into_any_element()
     }
 
     fn render_changes(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let muted = cx.theme().muted_foreground;
-        let groups: Vec<AnyElement> = Group::ALL.iter().filter_map(|&g| self.render_group(g, cx)).collect();
         let empty = self.loaded && self.status.entries.is_empty();
         let view = cx.entity().downgrade();
         div()
@@ -605,9 +655,14 @@ impl CommitPanel {
             .on_action(cx.listener(|this, _: &CommitAndPush, window, cx| this.commit_then(true, window, cx)))
             .flex_1()
             .min_h_0()
-            .overflow_y_scroll()
             .py_1()
-            .children(groups)
+            .when(!empty, |d| {
+                d.child(
+                    uniform_list("changes", self.rows.len(), cx.processor(Self::render_rows))
+                        .track_scroll(&self.scroll)
+                        .size_full(),
+                )
+            })
             .when(empty, |d| d.child(div().p_4().text_color(muted).child("No local changes")))
             .context_menu(move |menu, _, cx| {
                 let Some(this) = view.upgrade() else {

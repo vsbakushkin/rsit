@@ -61,6 +61,13 @@ pub struct LogLoaded;
 
 impl EventEmitter<LogLoaded> for LogView {}
 
+/// A line of the branches panel: a section title or a ref (index into the refs).
+#[derive(Clone, Copy)]
+enum RefRow {
+    Section(&'static str),
+    Ref(usize),
+}
+
 pub struct LogView {
     repo: Repo,
     /// Latest loaded history.
@@ -76,6 +83,9 @@ pub struct LogView {
     scroll: UniformListScrollHandle,
     /// Magnification of the graph in the last rendered rows.
     graph_scale: f32,
+    /// The branches panel, rebuilt on render.
+    ref_rows: Vec<RefRow>,
+    refs_scroll: UniformListScrollHandle,
     focus: FocusHandle,
     text_input: Entity<InputState>,
     user_input: Entity<InputState>,
@@ -138,6 +148,8 @@ impl LogView {
             containing: None,
             scroll: UniformListScrollHandle::new(),
             graph_scale: 1.0,
+            ref_rows: Vec::new(),
+            refs_scroll: UniformListScrollHandle::new(),
             focus,
             text_input,
             user_input,
@@ -735,35 +747,55 @@ impl LogView {
     }
 
     fn render_refs(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-        let mut entries: Vec<AnyElement> = Vec::new();
+        // only the visible part of a long list (1000+ refs) is rendered
+        self.ref_rows.clear();
         if let Some(graph) = &self.graph {
-            let data = graph.data.clone();
-            let sections = [("Local", RefKind::LocalBranch), ("Remote", RefKind::RemoteBranch), ("Tags", RefKind::Tag)];
-            for (title, kind) in sections {
-                let mut refs: Vec<&Ref> = data.refs.refs.iter().filter(|r| r.kind == kind).collect();
-                if refs.is_empty() {
+            let refs = &graph.data.refs;
+            for (title, kind) in
+                [("Local", RefKind::LocalBranch), ("Remote", RefKind::RemoteBranch), ("Tags", RefKind::Tag)]
+            {
+                let mut section: Vec<usize> = (0..refs.refs.len()).filter(|&i| refs.refs[i].kind == kind).collect();
+                if section.is_empty() {
                     continue;
                 }
-                refs.sort_by(|a, b| data.refs.label_cmp(a, b));
-                entries.push(
+                section.sort_by(|&a, &b| refs.label_cmp(&refs.refs[a], &refs.refs[b]));
+                self.ref_rows.push(RefRow::Section(title));
+                self.ref_rows.extend(section.into_iter().map(RefRow::Ref));
+            }
+        }
+        div().id("refs").size_full().child(
+            uniform_list("refs-list", self.ref_rows.len(), cx.processor(Self::render_ref_rows))
+                .track_scroll(&self.refs_scroll)
+                .size_full(),
+        )
+    }
+
+    fn render_ref_rows(&mut self, range: Range<usize>, _: &mut Window, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let Some(graph) = &self.graph else { return Vec::new() };
+        let theme = cx.theme();
+        let data = graph.data.clone();
+        range
+            .filter_map(|ix| match *self.ref_rows.get(ix)? {
+                RefRow::Section(title) => Some(
                     div()
+                        .h(rems(ROW_HEIGHT / 16.))
                         .px_2()
-                        .pt_2()
-                        .pb_1()
+                        .flex()
+                        .items_end()
+                        .pb_0p5()
                         .text_xs()
                         .text_color(theme.muted_foreground)
                         .child(title)
                         .into_any_element(),
-                );
-                for r in refs {
-                    let target = r.target;
-                    let name = r.name.clone();
+                ),
+                RefRow::Ref(index) => {
+                    let r = &data.refs.refs[index];
+                    let (kind, target, name) = (r.kind, r.target, r.name.clone());
                     let current =
                         kind == RefKind::LocalBranch && data.refs.current_branch.as_deref() == Some(r.name.as_str());
                     let visible = graph.row_of(&target).is_some();
                     let filtered_on = self.filter.branches.contains(&r.name);
-                    entries.push(
+                    Some(
                         div()
                             .id(SharedString::from(format!("ref-{}", r.full_name)))
                             .px_3()
@@ -793,11 +825,10 @@ impl LogView {
                                 }
                             })
                             .into_any_element(),
-                    );
+                    )
                 }
-            }
-        }
-        div().id("refs").size_full().overflow_y_scroll().children(entries)
+            })
+            .collect()
     }
 
     fn render_details(&mut self, cx: &mut Context<Self>) -> impl IntoElement {

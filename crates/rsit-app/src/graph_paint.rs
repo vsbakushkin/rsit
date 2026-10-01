@@ -38,8 +38,10 @@ pub fn paint_row(bounds: Bounds<Pixels>, row: RowGraph, scale: f32, window: &mut
     let point = |x: f32, y: f32| origin + gpui_kit::point(px(x * scale), px(y * scale));
 
     window.with_content_mask(Some(ContentMask { bounds }), |window| {
+        let mut pen = Pen::new(scale);
         for element in &row.elements {
-            let color = lane_color(element.color_id);
+            let color = element.color_id;
+            let dashed = element.dashed();
             let x1 = LANE_WIDTH * element.pos as f32 + element_center;
             let y1 = row_center;
             match element.kind {
@@ -48,28 +50,29 @@ pub fn paint_row(bounds: Bounds<Pixels>, row: RowGraph, scale: f32, window: &mut
                     let down = dir == EdgeDir::Down;
                     if other_pos == element.pos {
                         let y2 = if down { ROW_HEIGHT } else { 0.0 };
-                        line(window, point(x1, y1), point(x1, y2), color, element.dashed(), scale);
+                        pen.line(window, color, point(x1, y1), point(x1, y2), dashed);
                         if arrow {
-                            arrow_head(window, (x1, y1), (x1, y2), point, color, scale);
+                            pen.arrow_head(color, (x1, y1), (x1, y2), point);
                         }
                     } else {
                         // twice as long as the half-row so neighbouring rows dock
                         let x2 = LANE_WIDTH * other_pos as f32 + element_center;
                         let y2 = if down { ROW_HEIGHT + row_center } else { row_center - ROW_HEIGHT };
-                        line(window, point(x1, y1), point(x2, y2), color, element.dashed(), scale);
+                        pen.line(window, color, point(x1, y1), point(x2, y2), dashed);
                         if arrow {
-                            arrow_head(window, (x1, y1), ((x1 + x2) / 2.0, (y1 + y2) / 2.0), point, color, scale);
+                            pen.arrow_head(color, (x1, y1), ((x1 + x2) / 2.0, (y1 + y2) / 2.0), point);
                         }
                     }
                 }
                 PrintKind::Terminal { dir } => {
                     let gap = CIRCLE_RADIUS / 2.0 + 1.0;
                     let y2 = if dir == EdgeDir::Down { ROW_HEIGHT - gap } else { gap };
-                    line(window, point(x1, y1), point(x1, y2), color, element.dashed(), scale);
-                    arrow_head(window, (x1, y1), (x1, y2), point, color, scale);
+                    pen.line(window, color, point(x1, y1), point(x1, y2), dashed);
+                    pen.arrow_head(color, (x1, y1), (x1, y2), point);
                 }
             }
         }
+        pen.finish(window);
         for element in row.elements.iter().filter(|e| e.kind == PrintKind::Node) {
             let color = lane_color(element.color_id);
             let center = point(LANE_WIDTH * element.pos as f32 + element_center, row_center);
@@ -86,64 +89,86 @@ pub fn paint_row(bounds: Bounds<Pixels>, row: RowGraph, scale: f32, window: &mut
     });
 }
 
-fn line(window: &mut Window, from: Point<Pixels>, to: Point<Pixels>, color: Hsla, dashed: bool, scale: f32) {
-    if dashed {
-        dashed_line(window, from, to, color, scale);
-        return;
-    }
-    let mut path = PathBuilder::stroke(px(LINE * scale));
-    path.move_to(from);
-    path.line_to(to);
-    if let Ok(path) = path.build() {
-        window.paint_path(path, color);
-    }
-}
-
-fn dashed_line(window: &mut Window, from: Point<Pixels>, to: Point<Pixels>, color: Hsla, scale: f32) {
-    let (dx, dy) = (f32::from(to.x - from.x), f32::from(to.y - from.y));
-    let len = dx.hypot(dy);
-    if len == 0.0 {
-        return;
-    }
-    let (dash, gap) = (3.0 * scale, 3.0 * scale);
-    let mut t = 0.0;
-    let mut path = PathBuilder::stroke(px(LINE * scale));
-    while t < len {
-        let end = (t + dash).min(len);
-        path.move_to(from + gpui_kit::point(px(dx * t / len), px(dy * t / len)));
-        path.line_to(from + gpui_kit::point(px(dx * end / len), px(dy * end / len)));
-        t += dash + gap;
-    }
-    if let Ok(path) = path.build() {
-        window.paint_path(path, color);
-    }
-}
-
-/// Two short strokes at `tip`, pointing away from `from` (IntelliJ `rotate`).
-fn arrow_head(
-    window: &mut Window,
-    from: (f32, f32),
-    tip: (f32, f32),
-    point: impl Fn(f32, f32) -> Point<Pixels>,
-    color: Hsla,
+/// Strokes of one row. Painting every segment as its own path made the graph
+/// the most expensive part of a frame, so vertical lines become quads and the
+/// rest is batched into one path per color.
+struct Pen {
     scale: f32,
-) {
-    let (tx, ty) = (from.0 - tip.0, from.1 - tip.1);
-    let d = tx.hypot(ty);
-    if d == 0.0 {
-        return;
+    paths: Vec<(i32, PathBuilder)>,
+}
+
+impl Pen {
+    fn new(scale: f32) -> Self {
+        Self { scale, paths: Vec::new() }
     }
-    let length = ARROW_LENGTH * ROW_HEIGHT;
-    let (sx, sy) = (length * tx / d, length * ty / d);
-    let cos = ARROW_ANGLE_COS2.sqrt();
-    let sin = (1.0 - ARROW_ANGLE_COS2).sqrt();
-    for sin in [sin, -sin] {
-        let (rx, ry) = (sx * cos - sy * sin, sx * sin + sy * cos);
-        let mut path = PathBuilder::stroke(px(LINE * scale));
-        path.move_to(point(tip.0, tip.1));
-        path.line_to(point(tip.0 + rx, tip.1 + ry));
-        if let Ok(path) = path.build() {
-            window.paint_path(path, color);
+
+    fn path(&mut self, color: i32) -> &mut PathBuilder {
+        let index = match self.paths.iter().position(|(c, _)| *c == color) {
+            Some(index) => index,
+            None => {
+                self.paths.push((color, PathBuilder::stroke(px(LINE * self.scale))));
+                self.paths.len() - 1
+            }
+        };
+        &mut self.paths[index].1
+    }
+
+    fn line(&mut self, window: &mut Window, color: i32, from: Point<Pixels>, to: Point<Pixels>, dashed: bool) {
+        if dashed {
+            self.dashed_line(color, from, to);
+        } else if from.x == to.x {
+            let width = px(LINE * self.scale);
+            let (top, bottom) = if from.y < to.y { (from.y, to.y) } else { (to.y, from.y) };
+            let origin = gpui_kit::point(from.x - width / 2.0, top);
+            window.paint_quad(fill(Bounds::new(origin, size(width, bottom - top)), lane_color(color)));
+        } else {
+            let path = self.path(color);
+            path.move_to(from);
+            path.line_to(to);
+        }
+    }
+
+    fn dashed_line(&mut self, color: i32, from: Point<Pixels>, to: Point<Pixels>) {
+        let (dx, dy) = (f32::from(to.x - from.x), f32::from(to.y - from.y));
+        let len = dx.hypot(dy);
+        if len == 0.0 {
+            return;
+        }
+        let (dash, gap) = (3.0 * self.scale, 3.0 * self.scale);
+        let path = self.path(color);
+        let mut t = 0.0;
+        while t < len {
+            let end = (t + dash).min(len);
+            path.move_to(from + gpui_kit::point(px(dx * t / len), px(dy * t / len)));
+            path.line_to(from + gpui_kit::point(px(dx * end / len), px(dy * end / len)));
+            t += dash + gap;
+        }
+    }
+
+    /// Two short strokes at `tip`, pointing away from `from` (IntelliJ `rotate`).
+    fn arrow_head(&mut self, color: i32, from: (f32, f32), tip: (f32, f32), point: impl Fn(f32, f32) -> Point<Pixels>) {
+        let (tx, ty) = (from.0 - tip.0, from.1 - tip.1);
+        let d = tx.hypot(ty);
+        if d == 0.0 {
+            return;
+        }
+        let length = ARROW_LENGTH * ROW_HEIGHT;
+        let (sx, sy) = (length * tx / d, length * ty / d);
+        let cos = ARROW_ANGLE_COS2.sqrt();
+        let sin = (1.0 - ARROW_ANGLE_COS2).sqrt();
+        let path = self.path(color);
+        for sin in [sin, -sin] {
+            let (rx, ry) = (sx * cos - sy * sin, sx * sin + sy * cos);
+            path.move_to(point(tip.0, tip.1));
+            path.line_to(point(tip.0 + rx, tip.1 + ry));
+        }
+    }
+
+    fn finish(self, window: &mut Window) {
+        for (color, path) in self.paths {
+            if let Ok(path) = path.build() {
+                window.paint_path(path, lane_color(color));
+            }
         }
     }
 }

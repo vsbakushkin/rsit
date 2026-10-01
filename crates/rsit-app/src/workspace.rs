@@ -224,7 +224,12 @@ impl Render for Workspace {
             .child(
                 div().flex_1().min_h_0().child(
                     h_resizable("workspace")
-                        .child(resizable_panel().size(px(360.)).visible(self.show_commit).child(self.commit.clone()))
+                        .child(
+                            resizable_panel()
+                                .size(px(360.))
+                                .visible(self.show_commit)
+                                .child(self.commit.clone().cached(StyleRefinement::default().size_full())),
+                        )
                         .child(resizable_panel().child(self.log.clone())),
                 ),
             )

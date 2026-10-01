@@ -13,7 +13,8 @@ use gpui_kit::*;
     about = "Git log with a commit graph, IntelliJ style"
 )]
 struct Args {
-    /// Path inside the repository (defaults to the current directory).
+    /// Path inside the repository. Without it rsit opens the last repository
+    /// (or asks for one); --diff, --blame and the like use the current directory.
     path: Option<PathBuf>,
     /// Initial text filter (commit message or hash).
     #[arg(long)]
@@ -59,22 +60,24 @@ fn main() {
         branches: args.branch.into_iter().collect(),
         paths: args.paths,
     };
-    // started without a path outside a repository (e.g. from the app launcher):
-    // let the user choose one
-    let choose = args.path.is_none()
-        && [&args.diff, &args.rebase].iter().all(|a| a.is_none())
-        && [&args.blame, &args.history, &args.merge].iter().all(|a| a.is_none());
+    // without a path (e.g. from the app launcher) open the last repository,
+    // or let the user choose one; the views below always need a path
+    let views = [&args.diff, &args.rebase].iter().any(|a| a.is_some())
+        || [&args.blame, &args.history, &args.merge].iter().any(|a| a.is_some());
+    if args.path.is_none() && !views {
+        gpui_kit::application().with_assets(rsit_app::AppAssets).run(move |cx| {
+            init(cx);
+            match rsit_app::welcome::last_repo() {
+                Some(repo) => rsit_app::workspace::open(repo, filter, true, cx),
+                None => rsit_app::welcome::open(filter, cx),
+            }
+            cx.activate(true);
+        });
+        return;
+    }
     let path = args.path.unwrap_or_else(|| PathBuf::from("."));
     let repo = match rsit_git::Repo::discover(&path) {
         Ok(repo) => repo,
-        Err(_) if choose => {
-            gpui_kit::application().with_assets(rsit_app::AppAssets).run(move |cx| {
-                init(cx);
-                rsit_app::welcome::open(filter, cx);
-                cx.activate(true);
-            });
-            return;
-        }
         Err(e) => {
             eprintln!("rsit: {e:#}");
             std::process::exit(1);

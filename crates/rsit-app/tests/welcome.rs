@@ -126,3 +126,38 @@ fn press(cx: &mut TestAppContext, window: gpui_kit::AnyWindowHandle, key: &str) 
 fn canonical(path: &Path) -> PathBuf {
     path.canonicalize().unwrap()
 }
+
+#[gpui_kit::test]
+async fn toolbar_switches_to_a_recent_repository(cx: &mut TestAppContext) {
+    let _guard = isolate();
+    let (first, second) = (repo(), repo());
+    let second_dir = canonical(second.path());
+    Recent::add(&second_dir);
+    cx.update(rsit_app::init);
+    cx.update(|cx| {
+        let repo = rsit_git::Repo::discover(first.path()).unwrap();
+        rsit_app::workspace::open(repo, Default::default(), false, cx)
+    });
+    let window = cx.update(|cx| cx.windows())[0];
+    cx.run_until_parked();
+
+    cx.update_window(window, |_, window, cx| window.click("repos", cx)).unwrap();
+    cx.run_until_parked();
+    let name = second_dir.file_name().unwrap().to_string_lossy().into_owned();
+    cx.update_window(window, |_, window, cx| {
+        let menu = window.within("popup-menu");
+        let labels: Vec<String> = (0..10usize)
+            .map(|i| menu.try_find(i).and_then(|item| item.label().map(str::to_string)).unwrap_or_default())
+            .collect();
+        assert_eq!(labels[0], "Open…");
+        let item = labels.iter().position(|l| l.starts_with(&name)).unwrap_or_else(|| panic!("menu: {labels:?}"));
+        window.within("popup-menu").click(item, cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+
+    let windows = cx.update(|cx| cx.windows());
+    assert_eq!(windows.len(), 1, "the old main window is replaced");
+    assert_ne!(windows[0].window_id(), window.window_id());
+    assert_eq!(Recent::load().first(), Some(&second_dir));
+}

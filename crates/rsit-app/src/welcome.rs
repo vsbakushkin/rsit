@@ -60,6 +60,26 @@ impl Recent {
     }
 }
 
+/// The most recently opened repository that still exists.
+pub fn last_repo() -> Option<Repo> {
+    Recent::load().iter().find_map(|dir| Repo::discover(dir).ok())
+}
+
+/// Shows the system folder picker; resolves to the chosen folder, or `None` if cancelled.
+pub fn pick_folder(cx: &mut App) -> Task<anyhow::Result<Option<PathBuf>>> {
+    let paths = cx.prompt_for_paths(PathPromptOptions {
+        files: false,
+        directories: true,
+        multiple: false,
+        prompt: Some("Open".into()),
+    });
+    cx.spawn(async move |_| match paths.await {
+        Ok(Ok(Some(paths))) => Ok(paths.into_iter().next()),
+        Ok(Ok(None)) | Err(_) => Ok(None),
+        Ok(Err(e)) => Err(e.context("cannot show the folder picker")),
+    })
+}
+
 fn recent_path() -> Option<PathBuf> {
     let state = std::env::var_os("XDG_STATE_HOME")
         .filter(|d| !d.is_empty())
@@ -133,27 +153,18 @@ impl Welcome {
 
     /// Asks for a folder with the system picker and opens the repository in it.
     fn pick(&mut self, cx: &mut Context<Self>) {
-        let paths = cx.prompt_for_paths(PathPromptOptions {
-            files: false,
-            directories: true,
-            multiple: false,
-            prompt: Some("Open".into()),
-        });
+        let picked = pick_folder(cx);
         self._pick = Some(cx.spawn(async move |this, cx| {
-            let picked = match paths.await {
-                Ok(Ok(Some(paths))) => paths.into_iter().next(),
-                Ok(Ok(None)) | Err(_) => None,
-                Ok(Err(e)) => {
-                    this.update(cx, |this, cx| {
-                        this.error = Some(format!("Cannot show the folder picker: {e:#}").into());
-                        cx.notify();
-                    })
-                    .ok();
-                    None
+            let picked = picked.await;
+            this.update_in(cx, |this, window, cx| match picked {
+                Ok(Some(dir)) => this.open_repo(&dir, window, cx),
+                Ok(None) => {}
+                Err(e) => {
+                    this.error = Some(format!("{e:#}").into());
+                    cx.notify();
                 }
-            };
-            let Some(dir) = picked else { return };
-            this.update_in(cx, |this, window, cx| this.open_repo(&dir, window, cx)).ok();
+            })
+            .ok();
         }));
     }
 

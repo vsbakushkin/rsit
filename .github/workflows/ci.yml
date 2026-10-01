@@ -26,7 +26,7 @@ jobs:
       - run: cargo fmt --all --check
 
   test:
-    name: Build, test and lint (${{ matrix.os }})
+    name: Test on ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -52,6 +52,16 @@ jobs:
       - run: cargo test --workspace --locked
       # same job as the build so clippy reuses its dependencies
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  # the check main's ruleset requires; matrix jobs report under per-OS names,
+  # so this one passes only when every OS did
+  test-result:
+    name: Build, test and lint
+    needs: test
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: test "${{ needs.test.result }}" = success
 
   # every merge to main that passes the checks becomes release v0.1.N
   version:

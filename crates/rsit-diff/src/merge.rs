@@ -280,11 +280,11 @@ fn tokens(text: &str) -> Vec<&str> {
     };
     for (i, c) in text.char_indices() {
         let k = class(c);
-        if let Some(p) = prev {
-            if !(p == k && (k == 0 || k == 1)) {
-                out.push(&text[start..i]);
-                start = i;
-            }
+        if let Some(p) = prev
+            && !(p == k && (k == 0 || k == 1))
+        {
+            out.push(&text[start..i]);
+            start = i;
         }
         prev = Some(k);
     }

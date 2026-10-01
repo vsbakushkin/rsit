@@ -153,10 +153,10 @@ impl CommitPanel {
                     Ok(status) => {
                         this.status = status;
                         this.loaded = true;
-                        if let Some((group, path)) = &this.selected {
-                            if !this.entries(*group).any(|e| &e.path == path) {
-                                this.selected = None;
-                            }
+                        if let Some((group, path)) = &this.selected
+                            && !this.entries(*group).any(|e| &e.path == path)
+                        {
+                            this.selected = None;
                         }
                     }
                     Err(e) => eprintln!("rsit: {e:#}"),
@@ -336,11 +336,11 @@ impl CommitPanel {
         self.amend = amend;
         let current = self.message.read(cx).value().to_string();
         if amend {
-            if current.trim().is_empty() {
-                if let Ok(last) = rsit_git::changes::last_commit_message(self.repo.cwd()) {
-                    self.message_before_amend = Some(current);
-                    self.message.update(cx, |m, cx| m.set_value(last, window, cx));
-                }
+            if current.trim().is_empty()
+                && let Ok(last) = rsit_git::changes::last_commit_message(self.repo.cwd())
+            {
+                self.message_before_amend = Some(current);
+                self.message.update(cx, |m, cx| m.set_value(last, window, cx));
             }
         } else if let Some(previous) = self.message_before_amend.take() {
             self.message.update(cx, |m, cx| m.set_value(previous, window, cx));

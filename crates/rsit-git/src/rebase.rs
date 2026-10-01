@@ -80,10 +80,10 @@ impl RebasePlan {
 
     /// Commits after `base` up to HEAD, like `git rebase -i <base>`; `None` from the root.
     pub fn after(cwd: &Path, base: Option<ObjectId>) -> Result<Self> {
-        if let Some(base) = base {
-            if run(cwd, &["merge-base", "--is-ancestor", &base.to_string(), "HEAD"]).is_err() {
-                bail!("{} is not an ancestor of HEAD", base.to_hex_with_len(8));
-            }
+        if let Some(base) = base
+            && run(cwd, &["merge-base", "--is-ancestor", &base.to_string(), "HEAD"]).is_err()
+        {
+            bail!("{} is not an ancestor of HEAD", base.to_hex_with_len(8));
         }
         let range = match base {
             Some(base) => format!("{base}..HEAD"),
@@ -164,12 +164,13 @@ impl RebasePlan {
                 Action::Drop => "drop",
             };
             todo.push_str(&format!("{cmd} {} {}\n", e.commit, e.subject()));
-            if let Some(message) = &e.new_message {
-                if !e.action.melds() && e.action != Action::Drop {
-                    let file = dir.join(format!("message-{i}.txt"));
-                    std::fs::write(&file, message)?;
-                    pending_message = Some(file);
-                }
+            if let Some(message) = &e.new_message
+                && !e.action.melds()
+                && e.action != Action::Drop
+            {
+                let file = dir.join(format!("message-{i}.txt"));
+                std::fs::write(&file, message)?;
+                pending_message = Some(file);
             }
         }
         flush(&mut todo, &mut pending_message);

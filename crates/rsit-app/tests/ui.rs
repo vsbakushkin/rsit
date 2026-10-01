@@ -8,18 +8,30 @@ use gpui_kit::test::{TestAppContextExt, TestWindowExt};
 use gpui_kit::{AppContext, Bounds, TestAppContext, WindowBounds, WindowOptions, point, px, size};
 use rsit_app::log_view::LogView;
 
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+/// `git` with a fixed identity, so tests do not depend on the user's config.
+fn git_command(dir: &Path, args: &[&str]) -> Command {
+    let mut command = Command::new("git");
+    command
         .current_dir(dir)
         .args(args)
         .env("GIT_AUTHOR_NAME", "Test")
         .env("GIT_AUTHOR_EMAIL", "test@example.com")
         .env("GIT_COMMITTER_NAME", "Test")
-        .env("GIT_COMMITTER_EMAIL", "test@example.com")
-        .output()
-        .unwrap();
+        .env("GIT_COMMITTER_EMAIL", "test@example.com");
+    command
+}
+
+fn git(dir: &Path, args: &[&str]) -> String {
+    let out = git_command(dir, args).output().unwrap();
     assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
     String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// Runs a merge that must stop on a conflict.
+fn merge_with_conflict(dir: &Path, branch: &str) {
+    let out = git_command(dir, &["merge", branch]).output().unwrap();
+    assert!(!out.status.success(), "conflict expected");
+    assert!(dir.join(".git/MERGE_HEAD").exists(), "merge did not start: {}", String::from_utf8_lossy(&out.stderr));
 }
 
 /// main: c1 - c2 - c3, feature: c2 - f1
@@ -356,8 +368,7 @@ async fn merge_conflict_banner_aborts(cx: &mut TestAppContext) {
     git(p, &["checkout", "-q", "main"]);
     std::fs::write(p.join("f"), "main\n").unwrap();
     git(p, &["commit", "-qam", "main"]);
-    let merge = Command::new("git").current_dir(p).args(["merge", "other"]).output().unwrap();
-    assert!(!merge.status.success(), "conflict expected");
+    merge_with_conflict(p, "other");
 
     cx.update(rsit_app::init);
     let repo = rsit_git::Repo::discover(p).unwrap();
@@ -597,7 +608,7 @@ async fn merge_window_resolves_and_stages(cx: &mut TestAppContext) {
     std::fs::write(p.join("f"), base.replace("line 6\n", "line 6 ours\n").replace("line 10\n", "line 10 ours\n"))
         .unwrap();
     git(p, &["commit", "-qam", "main"]);
-    assert!(!Command::new("git").current_dir(p).args(["merge", "feature"]).output().unwrap().status.success());
+    merge_with_conflict(p, "feature");
 
     cx.update(rsit_app::init);
     let repo = rsit_git::Repo::discover(p).unwrap();

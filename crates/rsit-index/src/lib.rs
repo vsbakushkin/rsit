@@ -41,10 +41,10 @@ fn read_graph_file(path: &Path) -> Result<CommitGraphData> {
     let n = r.u32()? as usize;
     let m = r.u32()? as usize;
     let mut ids = Vec::with_capacity(n);
-    for chunk in r.take(20 * n)?.chunks_exact(20) {
+    for chunk in r.take(20 * n)?.as_chunks::<20>().0 {
         ids.push(ObjectId::from_bytes_or_panic(chunk));
     }
-    let times = r.take(8 * n)?.chunks_exact(8).map(|c| i64::from_le_bytes(c.try_into().unwrap())).collect();
+    let times = r.take(8 * n)?.as_chunks::<8>().0.iter().map(|c| i64::from_le_bytes(*c)).collect();
     let offsets: Vec<u32> = r.u32s(n + 1)?;
     let list: Vec<u32> = r.u32s(m)?;
     let by_id: Vec<u32> = r.u32s(n)?;
@@ -102,7 +102,7 @@ impl<'a> Reader<'a> {
     }
 
     fn u32s(&mut self, count: usize) -> Result<Vec<u32>> {
-        Ok(self.take(4 * count)?.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect())
+        Ok(self.take(4 * count)?.as_chunks::<4>().0.iter().map(|c| u32::from_le_bytes(*c)).collect())
     }
 }
 

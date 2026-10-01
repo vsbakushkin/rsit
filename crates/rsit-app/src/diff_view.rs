@@ -276,13 +276,13 @@ impl DiffView {
     fn update_settings(&mut self, update: impl FnOnce(&mut Settings), cx: &mut Context<Self>) {
         let before = self.settings;
         update(&mut self.settings);
-        if before.policy != self.settings.policy {
-            if let Some(diff) = self.diff.take() {
-                // the only other owner is a finished render, so this rarely clones
-                let mut diff = Arc::try_unwrap(diff).unwrap_or_else(|arc| clone_diff(&arc));
-                diff.recompare(self.settings.policy);
-                self.diff = Some(Arc::new(diff));
-            }
+        if before.policy != self.settings.policy
+            && let Some(diff) = self.diff.take()
+        {
+            // the only other owner is a finished render, so this rarely clones
+            let mut diff = Arc::try_unwrap(diff).unwrap_or_else(|arc| clone_diff(&arc));
+            diff.recompare(self.settings.policy);
+            self.diff = Some(Arc::new(diff));
         }
         self.rebuild_rows();
         self.current_change = None;
